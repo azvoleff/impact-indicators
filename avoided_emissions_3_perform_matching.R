@@ -6,6 +6,9 @@ library(optmatch)
 library(lubridate)
 library(biglm)
 library(tictoc)
+library(doParallel)
+
+data_folder <- '/home/rstudio/data/impacts_data'
 
 options("optmatch_max_problem_size"=Inf)
 
@@ -56,11 +59,14 @@ match_ae <- function(d, f) {
         this_d <- filter(d, group == this_group)
         # Calculate propensity scores with a GLM, or else use Mahalanobis 
         # distance if there aren't enough points to run a glm
-        if (sum(this_d$treatment) > 30) {
+        if (sum(this_d$treatment) < 1) {
+            return(NULL)
+        } else if (sum(this_d$treatment) < 15) {
+            dists <- match_on(f, data=this_d)
+        } else {
+            
             model <- glm(f, data=this_d, family=binomial())
             dists <- match_on(model, data=this_d)
-        } else {
-            dists <- match_on(f, data=this_d)
         }
         return(get_matches(this_d, dists))
     }
@@ -75,10 +81,8 @@ match_ae <- function(d, f) {
 
 ###############################################################################
 ###  Load sites and covariates
-
-treatment_key <- readRDS('Output/treatment_cell_key.RDS')
-readRDS('sites.RDS') %>%
-    select(-geometry) %>%
+treatment_key <- readRDS(file.path(data_folder, 'treatment_cell_key.RDS'))
+readRDS(file.path(data_folder, 'sites_cleaned_for_avoided_emissions.RDS')) %>%
     as_tibble() -> sites
 
 # Filter to include only values of group that appear in the treatment pixels, 
@@ -94,168 +98,182 @@ filter_groups <- function(vals) {
     return(vals)
 }
 
+this_id <- unique(treatment_key$id_numeric)[2]
+
 ###############################################################################
 ###  Run matching
-
+cl <- parallel::makeCluster(24)
+doParallel::registerDoParallel(cl)
 set.seed(31)
-ae <- foreach(this_year=unique(treatment_key$Data_Year),
-              .combine=foreach_rbind, .inorder=FALSE) %do% {
-    foreach(this_CI_ID=unique(treatment_key$CI_ID),
-            .combine=foreach_rbind, .inorder=FALSE) %do% {
-        tic()
-        ###############
-        # Load datasets
-        
-        site <- filter(sites,
-                       CI_ID == this_CI_ID,
-                       Data_Year == this_year)
-        if (file.exists(paste0('Output/m_', this_CI_ID, '_', this_year, '.RDS'))) {
-            print(paste0('Skipping ', this_CI_ID, ' for year ', this_year, '. Already processed.'))
-            return(NULL)
-        } else {
-            print(paste0('Processing ', this_CI_ID, ' for year ', this_year, '.'))
-        }
-
-        treatment_cell_IDs <- filter(treatment_key,
-                                     CI_ID == this_CI_ID,
-                                     !is.na(region),
-                                     Data_Year == this_year)
-        n_treatment_cells_total <- nrow(treatment_cell_IDs)
-        if (n_treatment_cells_total == 0) {
-            print(paste0('Skipping ', this_CI_ID, ' for year ', this_year, '. No treatment cells.'))
-            return(NULL)
-        }
-        vals <- foreach(this_region = unique(treatment_cell_IDs$region),
-                        .combine=rbind) %do% {
-            v <- readRDS(paste0('Output/treatments_and_controls_', this_region, 
-                                '.RDS'))
-            filter(v, region == this_region)
-        }
-
-        vals %>% full_join(
-                treatment_cell_IDs %>%
-                    select(cell, Data_Year) %>%
-                    mutate(treatment=TRUE)
-                , by='cell') -> vals
-        vals$treatment <- as.logical(vals$treatment)
-        vals$treatment[is.na(vals$treatment)] <- FALSE
-        vals$Data_Year <- this_year
-
-        # Remove areas falling within another CI site from the control sample 
-        # (but DON'T remove those areas falling within this site)
-        filter(vals,
-               !(cell %in% filter(treatment_key,
-                                  !(cell %in% filter(treatment_key,
-                                                     CI_ID == this_CI_ID)$cell))$cell)) -> vals
-
-        ################
-        # Setup grouping
-        
-        # Eliminate any pixels with NAs in group variables (happens occasionally 
-        # where polygons overlap some ocean, leading to undefined ecoregion, for 
-        # example)
-        n_filtered <- nrow(vals)
-        vals <- filter(vals,
-                       !is.na(region),
-                       !is.na(ecoregion),
-                       !is.na(pa))
-        n_filtered <- n_filtered - nrow(vals)
-        if (n_filtered > 0) {
-            print(paste0(this_CI_ID, ': Filtered ', n_filtered, ' rows due to missing data in grouping variables.'))
-        }
-        # Eliminate any groups that are only in the control pixels, or only in the 
-        # treatment pixels
-        vals <- filter_groups(vals)
-        sample_sizes <- vals %>%
-            count(treatment, group)
-        # Sample the treatment cells if there are more than MAX_TREATMENT pixels, 
-        # and the control cells if there are more than CONTROL_MULTIPLIER * 
-        # MAX_TREATMENT pixels
-        bind_rows(
-                filter(vals, treatment)  %>%
-                    group_by(group) %>%
-                    sample_n(min(MAX_TREATMENT, n())),
-                filter(vals, !treatment)  %>%
-                    group_by(this_group=group) %>%
-                    sample_n(min(CONTROL_MULTIPLIER * filter(sample_sizes,
-                                                             treatment == TRUE,
-                                                             group == this_group[1])$n,
-                                 n()))
-                ) %>% 
-            ungroup() %>%
-            select(-this_group) -> vals
-        # Refilter in case any groups were lost due to the sampling
-        vals <- filter_groups(vals)
-
-        # Project all items to cylindrical equal area
-        # d_crop <- projectRaster(d_crop, crs=CRS('+proj=cea'), method='ngb')
-        
-        ################
-        # Add defor data
-        
-        # For sites that were established in or after 2005, match on the five years 
-        # of deforestation data preceding the year of establishment. For sites 
-        # estab prior to 2005, don't match on defor rate
-        estab_year <- year(site$CI_Start_Date_clean)
-        f <- readRDS('Output/formula.RDS')
-        if (estab_year >= 2005) {
-            init <- vals[, grepl(paste0('fc_', substr(estab_year - 5, 3, 4)), names(vals))]
-            final <- vals[,grepl(paste0('fc_', substr(estab_year, 3, 4)), names(vals))]
-            defor_pre_intervention <- ((final - init) / init) * 100
-            # Correct for division by zero in places that had no forest cover in 
-            # year 0
-            defor_pre_intervention[init == 0] <- 0
-            names(defor_pre_intervention) <- 'defor_pre_intervention'
-            vals <- cbind(vals, defor_pre_intervention)
-            f <- update(f, ~ . + defor_pre_intervention)
-        }
-        #vals <- vals %>% select(-starts_with('fc_'), -starts_with('fcc_'))
-        
-        sample_sizes <- vals %>%
-            count(treatment, group)
-        print(paste0(this_CI_ID, ': ', paste(filter(sample_sizes, treatment)$n, collapse=', '), ' treatment pixels'))
-        print(paste0(this_CI_ID, ': ', paste(filter(sample_sizes, !treatment)$n, collapse=', '), ' control pixels'))
-
-        ##############
-        # Run matching
-        
-        if (nrow(filter(vals, treatment)) == 0) {
-            print(paste0(this_CI_ID, ': No treatment values remaining after filtering'))
-            return(NULL)
-        } else {
-            m <- match_ae(vals, f)
-            print(paste0(this_CI_ID, ': Formatting output'))
-            if (is.null(m)) {
-                print(paste0(this_CI_ID, ': no matches'))
-            } else {
-                m$CI_ID <- this_CI_ID
-                m$Data_Year <- this_year
-                m <- m %>% dplyr::select(CI_ID, everything())
-                print(paste0(this_CI_ID, ': saving output'))
-                m$sampled_fraction <- sum(vals$treatment) / n_treatment_cells_total
-                saveRDS(m, paste0('Output/m_', this_CI_ID, '_', this_year, '.RDS'))
-            }
-        }
-        toc()
-        return(m)
+ae <- foreach(
+    this_id=unique(treatment_key$id_numeric)[1:2],
+    .combine=c,
+    .inorder=FALSE,
+    .packages=c('tidyverse', 'optmatch', 'sf', 'foreach')
+) %dopar% {
+    
+    ###############
+    # Load datasets
+    
+    site <- filter(sites, id_numeric == this_id)
+    match_path <- file.path(data_folder, 'matches', paste0('m_', this_id, '.RDS'))
+    if (file.exists(match_path)) {
+        print(paste0('Skipping ', this_id, '. Already processed.'))
+        return(NULL)
+    } else {
+        print(paste0('Processing ', this_id, '.'))
     }
+
+    treatment_cell_IDs <- filter(treatment_key,
+                                 id_numeric == this_id,
+                                 !is.na(region))
+    n_treatment_cells_total <- nrow(treatment_cell_IDs)
+    if (n_treatment_cells_total == 0) {
+        print(paste0('Skipping ', this_id, '. No treatment cells.'))
+        return(NULL)
+    }
+    vals <- foreach(this_region = unique(treatment_cell_IDs$region),
+                    .combine=rbind) %do% {
+        readRDS(
+            file.path(
+                data_folder,
+                'extracted_covariates',
+                paste0(
+                    'treatments_and_controls_',
+                    this_region,
+                    '.RDS'
+                    )
+                )
+            ) %>%
+            bind_rows() %>%
+            filter(region == this_region)
+    }
+
+    vals %>% full_join(
+            treatment_cell_IDs %>%
+                select(cell) %>%
+                mutate(treatment=TRUE)
+            , by='cell') -> vals
+    vals$treatment <- as.logical(vals$treatment)
+    vals$treatment[is.na(vals$treatment)] <- FALSE
+
+    # Remove areas falling within another CI site from the control sample 
+    # (but DON'T remove those areas falling within this site)
+    vals %>%
+        filter(cell %in% filter(treatment_key, id_numeric == this_id)$cell) -> treatment_vals
+    vals %>%
+        filter(!(cell %in% treatment_key$cell)) -> potential_control_vals
+    bind_rows(treatment_vals, potential_control_vals) -> vals
+
+    ################
+    # Setup grouping
+    
+    # Eliminate any pixels with NAs in group variables (happens occasionally 
+    # where polygons overlap some ocean, leading to undefined ecoregion, for 
+    # example)
+    n_filtered <- nrow(vals)
+    vals <- filter(vals,
+                   !is.na(region),
+                   !is.na(ecoregion),
+                   !is.na(pa))
+    n_filtered <- n_filtered - nrow(vals)
+    if (n_filtered > 0) {
+        print(paste0(this_id, ': Filtered ', n_filtered, ' rows due to missing data in grouping variables.'))
+    }
+    # Eliminate any groups that are only in the control pixels, or only in the 
+    # treatment pixels
+    vals <- filter_groups(vals)
+    sample_sizes <- vals %>%
+        count(treatment, group)
+    # Sample the treatment cells if there are more than MAX_TREATMENT pixels, 
+    # and the control cells if there are more than CONTROL_MULTIPLIER * 
+    # MAX_TREATMENT pixels
+    bind_rows(
+            filter(vals, treatment)  %>%
+                group_by(group) %>%
+                sample_n(min(MAX_TREATMENT, n())),
+            filter(vals, !treatment)  %>%
+                group_by(this_group=group) %>%
+                sample_n(min(CONTROL_MULTIPLIER * filter(sample_sizes,
+                                                         treatment == TRUE,
+                                                         group == this_group[1])$n,
+                             n()))
+            ) %>% 
+        ungroup() %>%
+        select(-this_group) -> vals
+    # Refilter in case any groups were lost due to the sampling
+    vals <- filter_groups(vals)
+
+    # Project all items to cylindrical equal area
+    # d_crop <- projectRaster(d_crop, crs=CRS('+proj=cea'), method='ngb')
+    
+    ################
+    # Add defor data
+    
+    # For sites that were established in or after 2005, match on the five years 
+    # of deforestation data preceding the year of establishment. For sites 
+    # estab prior to 2005, don't match on defor rate
+    estab_year <- site$ci_start_year
+    f <- readRDS(file.path(data_folder, 'formula.RDS'))
+    if (estab_year >= 2005) {
+        init <- vals[, grepl(paste0('fc_20', substr(estab_year - 5, 3, 4)), names(vals))]
+        final <- vals[,grepl(paste0('fc_20', substr(estab_year, 3, 4)), names(vals))]
+        defor_pre_intervention <- ((final - init) / init) * 100
+        # Correct for division by zero in places that had no forest cover in 
+        # year 0
+        defor_pre_intervention[init == 0] <- 0
+        # Remove pixels that had no forest cover in year zero
+        vals <- filter(vals, defor_pre_intervention != 0, !(is.na(defor_pre_intervention)))
+        # Refilter in case any groups were lost due to the filtering for
+        # pixels with zero forest cover
+        vals <- filter_groups(vals)
+        names(defor_pre_intervention) <- 'defor_pre_intervention'
+        vals <- cbind(vals, defor_pre_intervention)
+        f <- update(f, ~ . + defor_pre_intervention)
+    }
+    #vals <- vals %>% select(-starts_with('fc_'), -starts_with('fcc_'))
+    
+    sample_sizes <- vals %>%
+        count(treatment, group)
+    print(paste0(this_id, ': ', paste(filter(sample_sizes, treatment)$n, collapse=', '), ' treatment pixels'))
+    print(paste0(this_id, ': ', paste(filter(sample_sizes, !treatment)$n, collapse=', '), ' control pixels'))
+
+    ##############
+    # Run matching
+    
+    if (nrow(filter(vals, treatment)) == 0) {
+        print(paste0(this_id, ': No treatment values remaining after filtering'))
+        return(NULL)
+    } else {
+        m <- match_ae(vals, f)
+        print(paste0(this_id, ': Formatting output'))
+        if (is.null(m)) {
+            print(paste0(this_id, ': no matches'))
+        } else {
+            m$id <- this_id
+            m <- m %>% dplyr::select(id, everything())
+            print(paste0(this_id, ': saving output'))
+            m$sampled_fraction <- sum(vals$treatment) / n_treatment_cells_total
+            saveRDS(m, match_path)
+        }
+    }
+    return(1)
 }
 
 ###############################################################################
 # Load all output and resave in one file
-m <- foreach(f=list.files('Output', pattern ='^m_[0-9]*_[0-9]{4}.RDS$'), 
-              .combine=foreach_rbind) %do% {
-    readRDS(paste0('Output/', f))
+m <- foreach(f=list.files(file.path(data_folder, 'matches'), pattern ='^m_[0-9]*.RDS$'), 
+              .combine=foreach_rbind) %dopar% {
+    readRDS(file.path(data_folder, 'matches', f))
 }
-saveRDS(m, 'Output/m_ALL.RDS')
+saveRDS(m, file.path(data_folder, 'matches', 'm_ALL.RDS'))
 
 
 ###############################################################################
 # Summarize results by site
 
 readRDS('sites.RDS') %>%
-    select(CI_ID,
-           Data_Year,
+    select(id,
            CI_Start_Date_clean, 
            CI_End_Date_clean) %>%
     mutate(CI_Start_Year=year(CI_Start_Date_clean),
@@ -280,16 +298,15 @@ m_site <- foreach (i=1:n_chunks, .combine=bind_rows) %do% {
 
         readRDS(paste0('Output/', f)) %>%
             select(cell,
-                   CI_ID,
-                   Data_Year, 
+                   id,
                    treatment,
                    sampled_fraction,
                    total_biomass,
                    starts_with('fc_')) %>%
-            left_join(sites, by=c('CI_ID', 'Data_Year')) %>%
+            left_join(sites, by=c('id')) %>%
             gather(year, forest_at_year_end, starts_with('fc_')) %>%
             mutate(year=2000 + as.numeric(str_replace(year, 'fc_', ''))) %>%
-            group_by(CI_ID, Data_Year, cell, treatment) %>%
+            group_by(id, cell, treatment) %>%
             filter(between(year, CI_Start_Year[1] - 1, CI_End_Year[1])) %>% # include one year prior to project start to get initial forest cover
             arrange(cell, year) %>%
             mutate(forest_loss_during_year=c(NA, diff(forest_at_year_end)),
@@ -303,7 +320,7 @@ m_site <- foreach (i=1:n_chunks, .combine=bind_rows) %do% {
             as_tibble() -> x
     }
     this_m %>%
-        group_by(CI_ID, Data_Year, year, treatment) %>%
+        group_by(id, year, treatment) %>%
         summarise(CI_Start_Year=CI_Start_Year[1],
                   CI_End_Year=CI_End_Year[1],
                   # correct totals for areas where only a partial sample was used 
@@ -312,9 +329,6 @@ m_site <- foreach (i=1:n_chunks, .combine=bind_rows) %do% {
                   Emissions_MgCO2e=sum(Emissions_MgCO2e, na.rm=TRUE) * (1 / sampled_fraction[1]),
                   n_pixels=n()) %>%
         as_tibble() -> this_m_site
-
-    toc()
-    gc()
     return(this_m_site)
 }
 
