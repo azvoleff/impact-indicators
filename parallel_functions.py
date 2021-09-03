@@ -3,6 +3,7 @@ import numpy as np
 from osgeo import gdal, osr
 from pathlib import Path
 import re
+import os
 
 
 def get_tile_coords(f):
@@ -23,6 +24,15 @@ def recode_cover_file(
     out_folder = arguments['out_folder']
     xres = arguments['xres']
     yres = arguments['yres']
+    
+    out_file = str(
+        out_folder / Path(
+            'Hansen_GFC-2020-v1.8_250m_coverbyyear_' + get_tile_coords(str(cover_file.name)) + '.tif'
+        )
+    )
+    
+    if os.path.exists(out_file):
+        return None
     
     cover_ds = gdal.Open(str(cover_file))
     cover_band = cover_ds.GetRasterBand(1)
@@ -51,11 +61,7 @@ def recode_cover_file(
     for n in range(21):
         mem_ds.GetRasterBand(n + 1).WriteArray(cover * np.logical_or(loss == 0, loss > n) * 100)
 
-    out_file = str(
-        out_folder / Path(
-            'Hansen_GFC-2020-v1.8_250m_coverbyyear_' + get_tile_coords(str(cover_file.name)) + '.tif'
-        )
-    )
+
     gdal.Warp(
         out_file,
         mem_ds,
