@@ -9,6 +9,7 @@ library(exactextractr)
 library(raster)
 library(tictoc)
 library(gdalUtils)
+library(Rcpp)
 
 options("optmatch_max_problem_size"=Inf)
 
@@ -52,42 +53,36 @@ lc_2015 <- brick(file.path(data_folder_avoided_emissions, 'covariates_lc_2015.ti
 names(lc_2015) <- read_csv(file.path(data_folder_avoided_emissions, 'covariates_lc_2015.csv'))$names
 
 ##############
-# Woody carbon
+# Forest cover
 #
 # Note: can't use the load_as_vrt function as for this case there are just way 
 # too many files for the woody carbon data, so load them manually into a vrt. 
-
 # Need to reproject and crop to match the other layers
 ext <- extent(covariates)
 output_extent <- c(ext[1], ext[3], ext[2], ext[4])
 output_dim <- c(ncol(covariates), nrow(covariates))
-c_tstor_woody_vrt_file <- tempfile(fileext='.vrt')
+fc_vrt_file <- tempfile(fileext='.vrt')
 gdalbuildvrt(
     file.path(
         data_folder, 
-        'woody_carbon_stored_2020*.tif'
+        'Hansen_250m',
+        'Hansen_GFC-2020-v1.8_250m_coverbyyear*.tif'
     ), 
-    c_tstor_woody_vrt_file,
+    fc_vrt_file,
     te=output_extent,
     tr=c(xres(covariates), yres(covariates))
 )
-c_tstor_woody_rast <- brick(c_tstor_woody_vrt_file)
-crs(c_tstor_woody_rast) <- crs('EPSG:4326')
-names(c_tstor_woody_rast) <-c(
-    paste0("fc_", 2000:2020),
-    paste0("fl_", 2001:2020),
-    paste0("cb_", 2000:2020),
-    paste0("ce_", 2001:2020)
-)
-fc <- c_tstor_woody_rast[[which(grepl('fc_', names(c_tstor_woody_rast)))]]
+fc_rast <- brick(fc_vrt_file)
+crs(fc_rast) <- crs('EPSG:4326')
+names(fc_rast) <- paste0("fc_", 2000:2020)
 
 # gdal_translate(
-#     c_tstor_woody_vrt_file,
+#     fc_vrt_file,
 #     file.path(data_folder_avoided_emissions, 'fc_2000_2020.tif'),
 #     co="COMPRESS=LZW"
 # )
 
-d <- stack(covariates, lc_2015, fc)
+d <- stack(covariates, lc_2015, fc_rast)
 # Ensure only layers in the formula are included (so extra data isn't being 
 # passed around)
 d <- d[[c(get_names(f),
@@ -135,11 +130,26 @@ exact_extract(
     bind_rows() %>%
     rename(region=value) %>%
     filter(!is.na(region)) -> treatment_key
+sourceCpp('area_ha.cpp')
+exact_extract(
+    d[[1]],
+    sites,
+    fun=area_ha,
+    summarize_df=TRUE,
+    include_cell=TRUE,
+    include_xy=TRUE,
+    xres=xres(d),
+    yres=yres(d),
+    use_cov_frac=FALSE
+) %>%
+    bind_rows() %>%
+    distinct() -> areas
+treatment_key %>%
+    left_join(areas) -> treatment_key
 saveRDS(treatment_key, 'avoided_emissions_data/treatment_cell_key.RDS')
 
 regions %>%
     filter(level1_ID %in% unique(treatment_key$region)) -> regions_filtered
-
 quarter <- function(polys) {
     foreach(n=1:nrow(polys), .combine=rbind) %do% {
         p <- polys[n, ]
@@ -172,23 +182,28 @@ regions_filtered_q <- foreach(n=1:nrow(regions_filtered), .combine=rbind) %do% {
     suppressWarnings(suppressMessages(quarter(regions_filtered[n, ])))
 }
 
-# Fix Fiji, which has a geometrycollection - convert it to a set of polygons 
-# (it is level1_ID 908, row 441)
-geom_coll <- regions_filtered_q %>% filter(st_is(., 'GEOMETRYCOLLECTION'))
-regions_filtered_q <- regions_filtered_q %>% filter(!st_is(., 'GEOMETRYCOLLECTION'))
-geom_coll <- st_cast(geom_coll)
-regions_filtered_q <- bind_rows(regions_filtered_q, geom_coll)
-
-geom_coll[[1,]]
+# # Fix Fiji, which has a geometrycollection - convert it to a set of polygons 
+# # (it is level1_ID 908, row 441)
+# geom_coll <- regions_filtered_q %>% filter(st_is(., 'GEOMETRYCOLLECTION'))
+# regions_filtered_q <- regions_filtered_q %>% filter(!st_is(., 'GEOMETRYCOLLECTION'))
+# geom_coll <- st_cast(geom_coll)
+# regions_filtered_q <- bind_rows(regions_filtered_q, geom_coll)
+#
+# geom_coll[[1,]]
+# this_region_ID <- unique(regions_filtered_q$level1_ID)[22]
 
 # Run extraction of control and treatment data by region to make the problem 
 # tractable in-memory
 n <- 1
 out <- foreach(
-    this_region_ID=unique(regions_filtered_q$level1_ID)[44], 
+    this_region_ID=unique(regions_filtered_q$level1_ID), 
     .packages=c('exactextractr', 'sf')
 ) %do% {
-    print(paste0('Processing region ', n, ' of ', length(unique(treatment_key$region)), ' (id ',  this_region_ID, ')...'))
+    print(paste0(
+        'Processing region ',
+        n,' of ', length(unique(treatment_key$region)),
+        ' (id ', this_region_ID, ')...'
+    ))
     this_file <- paste0(
         'avoided_emissions_data/extracted_covariates/treatments_and_controls_',
         this_region_ID,
@@ -197,12 +212,36 @@ out <- foreach(
     if (file.exists(this_file)) {
         print(paste0('Skipping ', this_region_ID, '. Already processed.'))
     } else {
-        this_region <- filter(regions_filtered_q, level1_ID == this_region_ID)
-        covariate_values <- exact_extract(
+        this_region <- filter(
+            regions_filtered_q,
+            level1_ID == this_region_ID
+        )
+        exact_extract(
             d,
             this_region,
             include_cell=TRUE
-        )
+        ) %>%
+            bind_rows() %>%
+            filter(coverage_fraction >= .99) %>%
+            select(-coverage_fraction) %>%
+            distinct() -> covariate_values
+        dim(covariate_values)
+        exact_extract(
+            d[[1]],
+            this_region,
+            fun=area_ha,
+            summarize_df=TRUE,
+            include_cell=TRUE,
+            include_xy=TRUE,
+            xres=xres(d),
+            yres=yres(d),
+            use_cov_frac=FALSE
+        ) %>%
+            bind_rows() %>%
+            distinct() -> areas
+        dim(areas)
+        covariate_values %>%
+            left_join(areas) -> covariate_values
         saveRDS(covariate_values, this_file)
     }
     n <- n + 1

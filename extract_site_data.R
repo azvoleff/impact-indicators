@@ -227,16 +227,6 @@ names(c_tstor_woody_rast) <-c(paste0("fc", 2000:2020),
 
 ######################
 # Irrecoverable carbon
-area_ha_file <- tempfile(fileext='.vrt')
-gdalbuildvrt(file.path(data_folder_local, "ref_raster_area_ha_100scale*.tif"),
-             area_ha_file,
-             te=output_extent,
-             tr=c(xres(c_tstor_soil_rast), yres(c_tstor_soil_rast)))
-area_ha <- raster(area_ha_file)
-names(area_ha) <- 'area_ha'
-
-######################
-# Irrecoverable carbon
 c_tstor_ic_vrt_file <- tempfile(fileext='.vrt')
 gdalbuildvrt(file.path(data_folder_local, "irrecoverable_carbon_250m_2018*.tif"),
              c_tstor_ic_vrt_file,
