@@ -36,7 +36,7 @@ get_names <- function(f) {
     v <- v[v != '']
     gsub('strata\\(([a-zA-Z_]*)\\)', '\\1', v)
 }
-
+match
 
 get_matches <- function(d, dists) {
     # If the controls are too far from the treatments (due to a caliper) then 
@@ -47,7 +47,12 @@ get_matches <- function(d, dists) {
     if (subdim_works) {
         #m <- pairmatch(dists, data=d, remove.unmatchables = TRUE)
         m <- fullmatch(dists, min.controls=1, max.controls=1, data=d)
+        d$match_group <- as.character(m)
         d <- d[matched(m), ]
+        # Rename match groups after the treatment cells
+        match_positions <- match(d$match_group[!d$treatment], d$match_group[d$treatment])
+        d$match_group[!d$treatment] <- d$cell[d$treatment][match_positions]
+        d$match_group[d$treatment] <- d$cell[d$treatment]
     } else {
         d <- data.frame()
     }
@@ -102,16 +107,18 @@ this_id <- unique(treatment_key$id_numeric)[2]
 
 ###############################################################################
 ###  Run matching
-cl <- parallel::makeCluster(24)
+cl <- parallel::makeCluster(16)
 doParallel::registerDoParallel(cl)
 set.seed(31)
+
+base_data <- readRDS(file.path(data_folder, 'treatments_and_controls.RDS'))
+
 ae <- foreach(
-    this_id=unique(treatment_key$id_numeric)[1:2],
+    this_id=unique(treatment_key$id_numeric),
     .combine=c,
     .inorder=FALSE,
     .packages=c('tidyverse', 'optmatch', 'sf', 'foreach')
-) %dopar% {
-    
+) %do% {
     ###############
     # Load datasets
     
@@ -132,22 +139,7 @@ ae <- foreach(
         print(paste0('Skipping ', this_id, '. No treatment cells.'))
         return(NULL)
     }
-    vals <- foreach(this_region = unique(treatment_cell_IDs$region),
-                    .combine=rbind) %do% {
-        readRDS(
-            file.path(
-                data_folder,
-                'extracted_covariates',
-                paste0(
-                    'treatments_and_controls_',
-                    this_region,
-                    '.RDS'
-                    )
-                )
-            ) %>%
-            bind_rows() %>%
-            filter(region == this_region)
-    }
+    vals <- filter(base_data, region %in% unique(treatment_cell_IDs$region))
 
     vals %>% full_join(
             treatment_cell_IDs %>%
@@ -219,19 +211,18 @@ ae <- foreach(
         init <- vals[, grepl(paste0('fc_20', substr(estab_year - 5, 3, 4)), names(vals))]
         final <- vals[,grepl(paste0('fc_20', substr(estab_year, 3, 4)), names(vals))]
         defor_pre_intervention <- ((final - init) / init) * 100
+        names(defor_pre_intervention) <- 'defor_pre_intervention'
+        vals <- cbind(vals, defor_pre_intervention)
         # Correct for division by zero in places that had no forest cover in 
         # year 0
-        defor_pre_intervention[init == 0] <- 0
+        vals$defor_pre_intervention[init == 0] <- 0
         # Remove pixels that had no forest cover in year zero
-        vals <- filter(vals, defor_pre_intervention != 0, !(is.na(defor_pre_intervention)))
+        vals <- filter(vals, init != 0)
         # Refilter in case any groups were lost due to the filtering for
         # pixels with zero forest cover
         vals <- filter_groups(vals)
-        names(defor_pre_intervention) <- 'defor_pre_intervention'
-        vals <- cbind(vals, defor_pre_intervention)
         f <- update(f, ~ . + defor_pre_intervention)
     }
-    #vals <- vals %>% select(-starts_with('fc_'), -starts_with('fcc_'))
     
     sample_sizes <- vals %>%
         count(treatment, group)
@@ -240,7 +231,6 @@ ae <- foreach(
 
     ##############
     # Run matching
-    
     if (nrow(filter(vals, treatment)) == 0) {
         print(paste0(this_id, ': No treatment values remaining after filtering'))
         return(NULL)
