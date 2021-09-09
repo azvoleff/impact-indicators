@@ -16,6 +16,8 @@ data_folder_onedrive <- 'D:/Documents and Settings/azvoleff/OneDrive - Conservat
 data_folder_local <- 'D:/Data/Impacts_Data'
 data_folder_deg_paper <- 'E:/Data'
 
+data_folder_local <- '/home/rstudio/data/impacts_data'
+
 
 unjoin_table <- function(starts_with_text, id_name) {
     variablebysite <- sites %>%
@@ -370,6 +372,9 @@ pixels$population[is.na(pixels$population)] <- 0
 saveRDS(pixels, 'tables/pixels.rds')
 saveRDS(pixelsbysite, 'tables/pixelsbysite.rds')
 
+sites <- readRDS(file.path(data_folder_local, 'tables/sites.rds'))
+pixels <- readRDS(file.path(data_folder_local, 'tables/pixels.rds'))
+pixelsbysite <- readRDS(file.path(data_folder_local, 'tables/pixelsbysite.rds'))
 
 # Recode sequestration potential from pixel data
 lengthyr = 1 # length of intervention in years
@@ -410,8 +415,24 @@ left_join(
             'Rangeland Restoration - Planned Grazing' = 8,
             .default=0
         )
+    ) -> sequestration_potential
+saveRDS(sequestration_potential, file.path(data_folder_local, 'tables/c_potl_seq.rds'))
+pixels %>%
+    select(
+        -starts_with('c_potl_seq')
     ) %>%
-    select(id, c_potl_seq) -> sequestration_potential
-saveRDS('tables/pixels_c_potl_seq.rds')
+    left_join(
+        sequestration_potential %>%
+        select(id, c_potl_seq)
+    ) -> pixels_with_seq
+saveRDS(pixels_with_seq, file.path(data_folder_local, 'tables/pixels_with_seq.rds'))
 
-table(rest$c_seq_pot)
+# Carry over maximum value of potential sequestraton within pixels
+pixels_with_seq %>% 
+    group_by(id) %>%
+    mutate(sequestration_potential=max(sequestration_potential)) %>%
+    distinct(id) %>%
+    ungroup() -> pixels_seq_unique
+
+nrow(pixels_seq_unique)
+table(pixels_seq_unique$c_potl_seq)
