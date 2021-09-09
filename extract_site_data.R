@@ -167,18 +167,18 @@ sites_sp %>%
         select(sites, -shape)
     ) -> sites_sp_save
 
-saveRDS(sites, 'tables/sites.RDS')
-saveRDS(sites_sp_save, 'tables/sites_sp.RDS')
-saveRDS(sls, 'tables/sls.RDS')
-saveRDS(slsbysite, 'tables/slsbysite.RDS')
-saveRDS(countries, 'tables/countries.RDS')
-saveRDS(countrybysite, 'tables/countrybysite.RDS')
-saveRDS(interventions, 'tables/interventions.RDS')
-saveRDS(interventionbysite, 'tables/interventionbysite.RDS')
-saveRDS(startags, 'tables/startags.RDS')
-saveRDS(startagbysite, 'tables/startagbysite.RDS')
-saveRDS(divisions, 'tables/divisions.RDS')
-saveRDS(divisionbysite, 'tables/divisionbysite.RDS')
+saveRDS(sites, 'tables/sites.rds')
+saveRDS(sites_sp_save, 'tables/sites_sp.rds')
+saveRDS(sls, 'tables/sls.rds')
+saveRDS(slsbysite, 'tables/slsbysite.rds')
+saveRDS(countries, 'tables/countries.rds')
+saveRDS(countrybysite, 'tables/countrybysite.rds')
+saveRDS(interventions, 'tables/interventions.rds')
+saveRDS(interventionbysite, 'tables/interventionbysite.rds')
+saveRDS(startags, 'tables/startags.rds')
+saveRDS(startagbysite, 'tables/startagbysite.rds')
+saveRDS(divisions, 'tables/divisions.rds')
+saveRDS(divisionbysite, 'tables/divisionbysite.rds')
 
 ###############################################################################
 ### Load indicator data
@@ -191,11 +191,11 @@ sp_raw %>%
     distinct() %>%
     mutate(id = 1:n()) %>%
     relocate(id) -> species
-write_csv(species, gzfile('species.csv.gz'))
+saveRDS(species, 'tables/species.rds')
 left_join(sp_raw, species) %>%
     rename(species_id=id) %>%
     select(site_id, species_id) -> speciesbysite 
-write_csv(speciesbysite, gzfile('speciesbysite.csv.gz'))
+saveRDS(speciesbysite, 'tables/speciesbysite.rds')
 
 #############
 # Soil carbon
@@ -339,11 +339,10 @@ pixels %>%
     rename(id=pixel_id) %>%
     distinct(id, reporting_year, .keep_all=TRUE) -> pixels
 print(nrow(pixels))
-write_csv(pixels, gzfile('pixels.csv.gz'))
 
 # Get pixel areas in hectares, and join to pixels table
 sourceCpp('area_ha.cpp')
-areas <- exact_extract(
+exact_extract(
     rasts[[1]],
     sites_sp,
     fun=area_ha,
@@ -351,10 +350,8 @@ areas <- exact_extract(
     include_xy=TRUE,
     include_cell=TRUE,
     xres=xres(rasts),
-    yres=yres(rasts))
-write_csv(areas, gzfile('areas.csv.gz'))
-
-areas %>%
+    yres=yres(rasts),
+    use_cov_frac=FALSE) %>%
     rename(id=cell) %>%
     distinct(id, .keep_all=TRUE) %>%
     right_join(pixels) -> pixels
@@ -370,9 +367,51 @@ pixels$population <- pixels$population * scaling
 pixels$population[pixels$population > 5000] <- 5000
 pixels$population[is.na(pixels$population)] <- 0
 
-# Fix erroneous small areas (due to resampling). Pixels should be around 6.25 
-# hectares given it is ~250 m data
-pixels$area_ha[pixels$area_ha < 3] <- mean(pixels$area_ha, na.rm=TRUE)
+saveRDS(pixels, 'tables/pixels.rds')
+saveRDS(pixelsbysite, 'tables/pixelsbysite.rds')
 
-write_csv(pixels, gzfile('pixels.csv.gz'))
-write_csv(pixelsbysite, gzfile('pixelsbysite.csv.gz'))
+
+# Recode sequestration potential from pixel data
+lengthyr = 1 # length of intervention in years
+left_join(
+    pixels,
+    pixelsbysite,
+    by=c('id'='pixel_id')
+) %>%
+    left_join(
+        (
+         sites %>%
+            select(id, restoration_type)
+        )
+        , by=c('site_id'='id')
+    ) %>%
+    mutate(
+        c_potl_seq = recode(
+            restoration_type,
+            'Agroforestry' = c_potl_seq_agfor0020 * lengthyr,
+            'Enrichment Planting/Assisted Natural Regeneration' = c_potl_seq_natre0020 * lengthyr,
+            'Natural Regeneration' = c_potl_seq_natre0020 * lengthyr,
+            'Mangrove Tree Restoration' = c_potl_seq_mtrer0020 * lengthyr,
+            'Mangrove Shrub Restoration' = c_potl_seq_mshrr0020 * lengthyr,
+            'Silvopasture' = c_potl_seq_agfor0020 * .15 * lengthyr,
+            'Seed dispersal' = c_potl_seq_natre0020 * .60 * lengthyr,
+            'Rangeland Restoration - Planned Grazing' = 3.67 * lengthyr,
+            .default=0
+        ),
+        c_potl_seq_type_verification = recode(
+            restoration_type,
+            'Agroforestry' = 1,
+            'Enrichment Planting/Assisted Natural Regeneration' = 2,
+            'Natural Regeneration' = 3,
+            'Mangrove Tree Restoration' = 4,
+            'Mangrove Shrub Restoration' = 5,
+            'Silvopasture' = 6,
+            'Seed dispersal' = 7, 
+            'Rangeland Restoration - Planned Grazing' = 8,
+            .default=0
+        )
+    ) %>%
+    select(id, c_potl_seq) -> sequestration_potential
+saveRDS('tables/pixels_c_potl_seq.rds')
+
+table(rest$c_seq_pot)
