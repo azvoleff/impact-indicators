@@ -425,14 +425,24 @@ pixels %>%
         sequestration_potential %>%
         select(id, c_potl_seq)
     ) -> pixels_with_seq
-saveRDS(pixels_with_seq, file.path(data_folder_local, 'tables/pixels_with_seq.rds'))
-
 # Carry over maximum value of potential sequestraton within pixels
 pixels_with_seq %>% 
     group_by(id) %>%
-    mutate(sequestration_potential=max(sequestration_potential)) %>%
-    distinct(id) %>%
+    mutate(c_potl_seq=max(c_potl_seq)) %>%
+    distinct(id, .keep_all=TRUE) %>%
     ungroup() -> pixels_seq_unique
+saveRDS(
+    select(
+        pixels_seq_unique,
+        id,
+        area_ha,
+        c_potl_seq
+    ),
+    file.path(
+        data_folder_local,
+        'tables/pixels_with_seq.rds'
+    )
+)
 
 nrow(pixels_seq_unique)
 table(pixels_seq_unique$c_potl_seq)
