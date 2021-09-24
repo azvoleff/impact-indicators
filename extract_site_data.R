@@ -296,12 +296,12 @@ names(eco_rast) <- 'ecosystem'
 # Population
 pop_vrt <- tempfile(fileext='.vrt')
 pop_in_files <- list.files(
-        file.path(
-            data_folder_deg_paper,
-            'Degradation_Paper',
-            'GEE_Rasters'),
-        pattern='pop_count_2000_05_10_15_20[-.0-9]*tif$',
-        full.names=TRUE
+    file.path(
+        data_folder_deg_paper,
+        'Degradation_Paper',
+        'GEE_Rasters'),
+    pattern='pop_count_2000_05_10_15_20[-.0-9]*tif$',
+    full.names=TRUE
 )
 gdalbuildvrt(pop_in_files,
              pop_vrt,

@@ -9,6 +9,7 @@ library(tictoc)
 library(doParallel)
 
 data_folder <- '/home/rstudio/data/impacts_data'
+data_folder <- 'D:/Code/LandDegradation/impact_indicators/extract-indicators/avoided_emissions_data'
 
 options("optmatch_max_problem_size"=Inf)
 
@@ -36,7 +37,6 @@ get_names <- function(f) {
     v <- v[v != '']
     gsub('strata\\(([a-zA-Z_]*)\\)', '\\1', v)
 }
-match
 
 get_matches <- function(d, dists) {
     # If the controls are too far from the treatments (due to a caliper) then 
@@ -87,7 +87,13 @@ match_ae <- function(d, f) {
 ###############################################################################
 ###  Load sites and covariates
 treatment_key <- readRDS(file.path(data_folder, 'treatment_cell_key.RDS'))
-readRDS(file.path(data_folder, 'sites_cleaned_for_avoided_emissions.RDS')) %>%
+readRDS(
+    file.path(
+        data_folder,
+        'sites_cleaned_for_avoided_emissions.RDS'
+    )
+) %>%
+    select(-shape) %>%
     as_tibble() -> sites
 
 # Filter to include only values of group that appear in the treatment pixels, 
@@ -262,14 +268,6 @@ saveRDS(m, file.path(data_folder, 'matches', 'm_ALL.RDS'))
 ###############################################################################
 # Summarize results by site
 
-readRDS('sites.RDS') %>%
-    select(id,
-           CI_Start_Date_clean, 
-           CI_End_Date_clean) %>%
-    mutate(CI_Start_Year=year(CI_Start_Date_clean),
-           CI_End_Year=ifelse(is.na(year(CI_End_Date_clean)), 2099, year(CI_End_Date_clean))) %>%
-    select(-CI_Start_Date_clean, -CI_End_Date_clean) -> sites
-
 get_chunk <- function(d, n, n_chunks=10) {
     start_ind <- round(seq(1, length(d), length.out=n_chunks + 1))[1:(n_chunks)]
     end_ind <- c(start_ind[2:n_chunks] - 1, length(d))
@@ -278,26 +276,41 @@ get_chunk <- function(d, n, n_chunks=10) {
 
 # Process in chunks to save memory
 n_chunks <- 20
-data_files <- list.files('Output', pattern ='^m_[0-9]*_[0-9]{4}.RDS$')
-m_site <- foreach (i=1:n_chunks, .combine=bind_rows) %do% {
-#m_site <- foreach (i=10:11, .combine=bind_rows) %do% {
+data_files <- list.files(file.path(data_folder, 'matches'),
+                         pattern ='^m_[0-9]*.RDS$')
+m_processed <- foreach (i=1:n_chunks, .combine=bind_rows) %do% {
     print(paste0('Progress: ', ((i-1)/n_chunks)*100, '%'))
     tic()
     this_m <- foreach(f=get_chunk(data_files, i, n_chunks),
                   .combine=bind_rows, .inorder=FALSE) %do% {
-
-        readRDS(paste0('Output/', f)) %>%
+        readRDS(file.path(data_folder, 'matches', f)) %>%
             select(cell,
                    id,
+                   area_ha,
                    treatment,
                    sampled_fraction,
                    total_biomass,
+                   match_group,
                    starts_with('fc_')) %>%
-            left_join(sites, by=c('id')) %>%
+            rename('id_numeric'='id') %>%
+            left_join(
+                (
+                sites %>%
+                    select(
+                        id,
+                        id_numeric,
+                        ci_start_year,
+                        ci_end_year
+                    ) %>%
+                    mutate(ci_end_year=ifelse(is.na(ci_end_year), 2099, ci_end_year))
+                ),
+                by=c('id_numeric')
+            ) %>%
             gather(year, forest_at_year_end, starts_with('fc_')) %>%
-            mutate(year=2000 + as.numeric(str_replace(year, 'fc_', ''))) %>%
+            mutate(year=as.numeric(str_replace(year, 'fc_', ''))) %>%
             group_by(id, cell, treatment) %>%
-            filter(between(year, CI_Start_Year[1] - 1, CI_End_Year[1])) %>% # include one year prior to project start to get initial forest cover
+            filter(between(year, ci_start_year[1] - 1, ci_end_year[1])) %>%
+            mutate(forest_at_year_end=forest_at_year_end/100 * area_ha) %>% # include one year prior to project start to get initial forest cover
             arrange(cell, year) %>%
             mutate(forest_loss_during_year=c(NA, diff(forest_at_year_end)),
                    forest_frac_remaining = forest_at_year_end / forest_at_year_end[1],
@@ -306,21 +319,57 @@ m_site <- foreach (i=1:n_chunks, .combine=bind_rows) %do% {
                    C_change=c(NA, diff(biomass_at_year_end)) * .5,
                    #  to convert change in C to CO2e * 3.67
                    Emissions_MgCO2e=C_change * -3.67) %>%
-            filter(between(year, CI_Start_Year[1], CI_End_Year[1])) %>% # drop year prior to project start as no longer needed
-            as_tibble() -> x
+            filter(between(year, ci_start_year[1], ci_end_year[1])) %>% # drop year prior to project start as no longer needed
+            as_tibble()
     }
-    this_m %>%
-        group_by(id, year, treatment) %>%
-        summarise(CI_Start_Year=CI_Start_Year[1],
-                  CI_End_Year=CI_End_Year[1],
-                  # correct totals for areas where only a partial sample was used 
-                  # by taking into account the fraction sampled
-                  forest_loss_ha=sum(forest_loss_during_year, na.rm=TRUE) * (1 / sampled_fraction[1]),
-                  Emissions_MgCO2e=sum(Emissions_MgCO2e, na.rm=TRUE) * (1 / sampled_fraction[1]),
-                  n_pixels=n()) %>%
-        as_tibble() -> this_m_site
-    return(this_m_site)
 }
+
+m_processed %>%
+    distinct(cell, year, .keep_all=TRUE) %>%
+    group_by(cell, year, treatment) %>%
+    summarise(
+        ci_start_year=ci_start_year[1],
+        ci_end_year=ci_end_year[1],
+        sampled_fraction=sampled_fraction[1],
+        match_group=match_group[1],
+        # correct totals for areas where only a partial sample was used by 
+        # taking into account the fraction sampled
+        forest_loss_ha=sum(abs(forest_loss_during_year), na.rm=TRUE) * (1 / sampled_fraction[1]),
+        Emissions_MgCO2e=sum(abs(Emissions_MgCO2e), na.rm=TRUE) * (1 / sampled_fraction[1]),
+        n_pixels=n()
+    ) %>%
+    group_by(match_group, cell, treatment) %>%
+    summarise(
+        forest_loss_ha=sum(forest_loss_ha, na.rm=TRUE),
+        Emissions_MgCO2e=sum(Emissions_MgCO2e, na.rm=TRUE)
+    ) %>%
+    group_by(match_group) %>%
+    summarise(
+        cell=cell[treatment],
+        forest_loss_avoided_ha=forest_loss_ha[!treatment] - forest_loss_ha[treatment],
+        emissions_avoided_mgco2e=Emissions_MgCO2e[!treatment] - Emissions_MgCO2e[treatment]
+    ) %>%
+    rename(id=cell)  %>%
+    ungroup() %>%
+    select(-match_group) -> pixels_ae
+saveRDS(pixels_ae, 'tables/pixels_ae.rds')
+
+m_processed %>%
+    distinct(cell, id) %>%
+    rename(
+        site_id=id,
+        cell_id=cell
+    ) %>%
+    relocate(cell_id) -> pixels_ae_bysite
+
+
+table(avoided_emissions$forest_loss_avoided_ha > 0)
+table(avoided_emissions$forest_loss_avoided_ha < 0)
+sum(avoided_emissions$forest_loss_avoided_ha)
+sum(avoided_emissions$emissions_avoided_mgco2e)
+
+nrow(avoided_emissions)
+length(unique(avoided_emissions$cell))
 
 saveRDS(m_site, file='output_raw_by_site.RDS')
 write_csv(m_site, 'output_raw_by_site.csv')
