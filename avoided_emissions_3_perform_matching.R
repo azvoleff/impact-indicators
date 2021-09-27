@@ -371,5 +371,5 @@ sum(avoided_emissions$emissions_avoided_mgco2e)
 nrow(avoided_emissions)
 length(unique(avoided_emissions$cell))
 
-saveRDS(m_site, file='output_raw_by_site.RDS')
-write_csv(m_site, 'output_raw_by_site.csv')
+saveRDS(m_site, file.path('avoided_emissions_data'. 'output_raw_by_site.rds')
+write_csv(m_site, file.path('avoided_emissions_data'. 'output_raw_by_site.csv')
