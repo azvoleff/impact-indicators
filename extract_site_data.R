@@ -11,13 +11,9 @@ library(foreach)
 library(Rcpp)
 
 
-data_folder_onedrive <- 'D:/Documents and Settings/azvoleff/OneDrive - Conservation International Foundation/Data'
 #data_folder_local <- 'E:/Data/Impacts_Data'
 data_folder_local <- 'D:/Data/Impacts_Data'
-data_folder_deg_paper <- 'E:/Data'
-
-data_folder_local <- '/home/rstudio/data/impacts_data'
-
+#data_folder_local <- '/home/rstudio/data/impacts_data'
 
 unjoin_table <- function(starts_with_text, id_name) {
     variablebysite <- sites %>%
@@ -52,6 +48,36 @@ split_on_meridian <- function(p) {
 }
 
 
+quarter_split <- function(polys) {
+    foreach(n=1:nrow(polys), .combine=rbind) %do% {
+        p <- polys[n, ]
+        xmn <- extent(p)[1]
+        xmx <- extent(p)[2]
+        ymn <- extent(p)[3]
+        ymx <- extent(p)[4]
+        mid_x <- (xmx - xmn) / 2 + xmn
+        mid_y <- (ymx - ymn) / 2 + ymn
+        nw_bounds <- st_sfc(st_polygon(list(matrix(c(xmn, xmn, mid_x, mid_x, xmn,
+                                                     ymx, mid_y, mid_y, ymx, ymx), ncol=2))),
+                           crs=4326)
+        ne_bounds <- st_sfc(st_polygon(list(matrix(c(mid_x, mid_x, xmx, xmx, mid_x,
+                                                     ymx, mid_y, mid_y, ymx, ymx), ncol=2))),
+                           crs=4326)
+        se_bounds <- st_sfc(st_polygon(list(matrix(c(mid_x, mid_x, xmx, xmx, mid_x,
+                                                     mid_y, ymn, ymn, mid_y, mid_y), ncol=2))),
+                           crs=4326)
+        sw_bounds <- st_sfc(st_polygon(list(matrix(c(xmn, xmn, mid_x, mid_x, xmn,
+                                                     mid_y, ymn, ymn, mid_y, mid_y), ncol=2))),
+                           crs=4326)
+        sf_use_s2(FALSE)
+        rbind(st_intersection(p, nw_bounds),
+              st_intersection(p, ne_bounds),
+              st_intersection(p, se_bounds),
+              st_intersection(p, sw_bounds))
+    }
+}
+
+
 load_as_vrt <- function(folder, pattern, band=FALSE, raster=TRUE) {
     vrt_file <- tempfile(fileext='.vrt')
     files <- list.files(folder, pattern=pattern)
@@ -72,40 +98,26 @@ load_as_vrt <- function(folder, pattern, band=FALSE, raster=TRUE) {
         return(vrt_file)
     }
 }
+
 ###############################################################################
 ### Load sites
 
-sites_2020 <- st_read(paste0(data_folder_onedrive, "/Impact_Sites/CI_Online_Global_Impact_Sites.gdb"))
-sites_2020 <- st_zm(sites_2020, drop=TRUE)
-sites_2020 %>%
+sites <- st_read(file.path("sites", "Final_PostVetting_FY2021.gdb"))
+sites <- st_zm(sites) # Drop zm coords
+sites %>%
     rename(id = CI_ID) %>%
-    rename_all(tolower) -> sites_2020
-sites_2020 <- st_transform(sites_2020, 'EPSG:4326')
+    rename_all(tolower) -> sites
 
-sites_2021 <- st_read(paste0(data_folder_onedrive, "/Impact_Sites/Final_PreVetting_FY2021.gdb"))
-sites_2021 <- st_zm(sites_2021) # Drop zm coords
-sites_2021 %>%
-    rename(id = CI_ID) %>%
-    rename_all(tolower) -> sites_2021
-sites_2021 <- st_transform(sites_2021, 'EPSG:4326')
+sites <- st_transform(sites, 'EPSG:4326')
 
-sites_2020 %>%
+sites %>%
     mutate(validity = st_is_valid(., reason=TRUE)) %>%
     filter(validity != 'Valid Geometry') %>%
     as_tibble() %>%
     select(-shape) %>%
-    write_csv('site_validity_2020.csv')
+    write_csv('site_validity.csv')
 
-sites_2021 %>%
-    mutate(validity = st_is_valid(., reason=TRUE)) %>%
-    filter(validity != 'Valid Geometry') %>%
-    as_tibble() %>%
-    select(-shape) %>%
-    write_csv('site_validity_2021.csv')
-
-
-# Load 2021 data into sites table
-sites_2021 %>%
+sites %>%
     mutate(validity = st_is_valid(.)) %>%
     filter(validity == TRUE) %>%
     select(-validity) -> sites
@@ -124,6 +136,14 @@ sites <- as_tibble(sites_sp)
 sites$shape <- st_as_text(sites_sp$shape)
 
 sites_sp <- split_on_meridian(sites_sp)
+
+sites_sp_large <- filter(sites_sp, area_ha > 1e7)
+
+sites_sp_large <- suppressWarnings(suppressMessages(quarter_split(sites_sp_large)))
+sites_sp_large <- suppressWarnings(suppressMessages(quarter_split(sites_sp_large)))
+
+sites_sp <- filter(sites_sp, area_ha <= 1e7) %>%
+    bind_rows(sites_sp_large)
 
 ###################################################
 # Split out data that was joined to the main tables
@@ -181,9 +201,144 @@ saveRDS(startags, 'tables/startags.rds')
 saveRDS(startagbysite, 'tables/startagbysite.rds')
 saveRDS(divisions, 'tables/divisions.rds')
 saveRDS(divisionbysite, 'tables/divisionbysite.rds')
+saveRDS(sites_sp_save, 'tables/sites_sp.rds')
+# Save sites for ingestion to GEE (filtering out all columns except for id)
+st_write(
+    select(sites_sp, id),
+    file.path("sites", "Final_PostVetting_FY2021_for_gee.shp"),
+    delete_dsn=TRUE
+)
 
 ###############################################################################
 ### Load indicator data
+
+#############
+# Carbon (woody, soil, irrecoverable)
+soil_c_rast <- load_as_vrt(data_folder_local, 'soc_bc_250m_scaled100_2020[-.0-9]*tif$')
+names(soil_c_rast) <- 'c_tstor_soil'
+biomass_c_rast <- load_as_vrt(data_folder_local, 'biomass_carbon_gfw_bc_250m_scaled100_2020[-.0-9]*tif$')
+names(biomass_c_rast) <- 'c_tstor_woody'
+c_tstor_ic_rast <- load_as_vrt(data_folder_local, "irrecoverable_carbon_250m_2018[-.0-9]*tif$")
+names(c_tstor_ic_rast) <- 'c_tstor_ic'
+c_rasts <- stack(soil_c_rast, biomass_c_rast, c_tstor_ic_rast)
+crs(c_rasts) <- crs('EPSG:4326')
+
+# # Get values to use for reprojecting and croping other layers to match
+ext <- extent(c_rasts)
+output_extent <- c(ext[1], ext[3], ext[2], ext[4])
+output_dim <- c(ncol(c_rasts), nrow(c_rasts))
+
+##########################################
+# Potential sequestration from restoration
+rest_rast_patterns <- c('c_potl_seq_agfor0020_250m[-.0-9]*',
+                        'c_potl_seq_agfor2060_250m[-.0-9]*',
+                        'c_potl_seq_natre0020_250m[-.0-9]*',
+                        'c_potl_seq_natre2060_250m[-.0-9]*',
+                        'c_potl_seq_mtrer0020_250m[-.0-9]*',
+                        'c_potl_seq_mtrer2060_250m[-.0-9]*',
+                        'c_potl_seq_mshrr0020_250m[-.0-9]*',
+                        'c_potl_seq_mshrr2060_250m[-.0-9]*',
+                        'c_potl_seq_pwtea0020_250m[-.0-9]*',
+                        'c_potl_seq_pwpin0020_250m[-.0-9]*',
+                        'c_potl_seq_pwoco0020_250m[-.0-9]*',
+                        'c_potl_seq_pwobr0020_250m[-.0-9]*',
+                        'c_potl_seq_pwoak0020_250m[-.0-9]*',
+                        'c_potl_seq_pweuc0020_250m[-.0-9]*')
+rest_c_rast <- foreach(p=rest_rast_patterns, .combine=raster::stack) %do% {
+    load_as_vrt(data_folder_local, p)
+}
+names(rest_c_rast) <- gsub('_250m\\[-\\.0-9\\]\\*', '', rest_rast_patterns)
+crs(rest_c_rast) <- crs('EPSG:4326')
+
+############
+# Ecosystems
+eco_rast <- load_as_vrt(data_folder_local, 'ecosystems_250m[-.0-9]*tif$')
+ecosystems_key <- data.frame(
+    id=c(1, 2, 3, 4, 5, 6, 7, 8),
+    ecosystem_name=c("Primary forest",
+                     "Secondary forest",
+                     "Grassland",
+                     "Wetlands",
+                     "Mangroves",
+                     "Salt marsh",
+                     "Seagrass",
+                     "Peatland")
+)
+names(eco_rast) <- 'ecosystem'
+    
+##########################################
+# Population
+pop_vrt <- tempfile(fileext='.vrt')
+gdalbuildvrt(file.path(data_folder_local, 'ppp_2020_1km_Aggregated.tif'),
+             pop_vrt,
+             te=output_extent,
+             tr=c(xres(c_rasts),
+                  yres(c_rasts)))
+population <- raster(pop_vrt)
+names(population) <- c('pop_2020')
+
+###############################################################################
+### Extract values
+rasts <- stack(c_rasts,
+               eco_rast,
+               population,
+               rest_c_rast)
+
+exact_extract(rasts,
+              sites_sp,
+              include_cell=TRUE,
+              include_cols=c('id', 'reporting_year')) %>%
+    rbindlist() %>%
+    rename(site_id=id,
+           pixel_id=cell) %>%
+    relocate(pixel_id, site_id, reporting_year, coverage_fraction) -> pixels_no_seq
+print(nrow(pixels_no_seq))
+# Take account of fact that some pixels within some sites might have been split 
+# across the polygons created by the quarter_split lines above, and that these 
+# pixels therefore need to be joined together within polygons so that there 
+# aren't duplicate pixel IDs within the same polygon
+pixels_no_seq %>%
+    select(pixel_id, site_id, coverage_fraction) %>%
+    group_by(site_id, pixel_id) %>%
+    summarise(coverage_fraction = sum(coverage_fraction)) -> pixelsbysite
+
+pixels_no_seq %>%
+    select(-site_id, -coverage_fraction) %>%
+    rename(id=pixel_id) %>%
+    distinct(id, reporting_year, .keep_all=TRUE) -> pixels_no_seq
+print(nrow(pixels_no_seq))
+
+# Get pixel areas in hectares, and join to pixels_no_seq table
+sourceCpp('area_ha.cpp')
+exact_extract(
+    rasts[[1]],
+    sites_sp,
+    fun=area_ha,
+    summarize_df=TRUE,
+    include_xy=TRUE,
+    include_cell=TRUE,
+    xres=xres(rasts),
+    yres=yres(rasts),
+    use_cov_frac=FALSE) %>%
+    rename(id=cell) %>%
+    distinct(id, .keep_all=TRUE) %>%
+    right_join(pixels_no_seq) -> pixels_no_seq
+print(nrow(pixels_no_seq))
+
+# rescale the population data to account for change in resolution
+population_original <- raster(
+    file.path(data_folder_local, 'ppp_2020_1km_Aggregated.tif')
+)
+scaling <- (xres(population) * yres(population)) /
+           (xres(population_original) * yres(population_original))
+pixels_no_seq$population <- pixels_no_seq$population * scaling
+
+# Topcode population
+pixels_no_seq$population[pixels_no_seq$population > 5000] <- 5000
+pixels_no_seq$population[is.na(pixels_no_seq$population)] <- 0
+
+saveRDS(pixels_no_seq, 'tables/pixels_no_seq.rds')
+saveRDS(pixelsbysite, 'tables/pixelsbysite.rds')
 
 #########
 # Species
@@ -199,187 +354,19 @@ left_join(sp_raw, species) %>%
     select(site_id, species_id) -> speciesbysite 
 saveRDS(speciesbysite, 'tables/speciesbysite.rds')
 
-#############
-# Soil carbon
-c_tstor_soil_rast <- load_as_vrt(data_folder_local, 'soil_carbon_stored_2020[-.0-9]*tif$')
-names(c_tstor_soil_rast) <- 'c_tstor_soil'
-crs(c_tstor_soil_rast) <- crs('EPSG:4326')
 
-##############
-# Woody carbon
-#
-# Note: can't use the load_as_vrt function as for this case there are just way 
-# too many files for the woody carbon data, so load them manually into a vrt. 
 
-# Need to reproject and crop to match the other layers
-ext <- extent(c_tstor_soil_rast)
-output_extent <- c(ext[1], ext[3], ext[2], ext[4])
-output_dim <- c(ncol(c_tstor_soil_rast), nrow(c_tstor_soil_rast))
-c_tstor_woody_vrt_file <- tempfile(fileext='.vrt')
-gdalbuildvrt(file.path(data_folder_local, 
-                       'woody_carbon_stored_2020*.tif'), 
-             c_tstor_woody_vrt_file,
-             te=output_extent, tr=c(xres(c_tstor_soil_rast), yres(c_tstor_soil_rast)))
-c_tstor_woody_rast <- brick(c_tstor_woody_vrt_file)
-crs(c_tstor_woody_rast) <- crs('EPSG:4326')
-names(c_tstor_woody_rast) <-c(paste0("fc", 2000:2020),
-                              paste0("fl", 2001:2020),
-                              paste0("cb", 2000:2020),
-                              paste0("ce", 2001:2020))
-
-######################
-# Irrecoverable carbon
-c_tstor_ic_vrt_file <- tempfile(fileext='.vrt')
-gdalbuildvrt(file.path(data_folder_local, "irrecoverable_carbon_250m_2018*.tif"),
-             c_tstor_ic_vrt_file,
-             te=output_extent,
-             tr=c(xres(c_tstor_soil_rast), yres(c_tstor_soil_rast)))
-c_tstor_ic_rast <- raster(c_tstor_ic_vrt_file)
-names(c_tstor_ic_rast) <- 'c_tstor_ic'
-
-##########################################
-# Potential sequestration from restoration
-rest_rast_patterns <- c('c_potl_seq_agfor0020_250m*',
-                        'c_potl_seq_agfor2060_250m*',
-                        'c_potl_seq_natre0020_250m*',
-                        'c_potl_seq_natre2060_250m*',
-                        'c_potl_seq_mtrer0020_250m*',
-                        'c_potl_seq_mtrer2060_250m*',
-                        'c_potl_seq_mshrr0020_250m*',
-                        'c_potl_seq_mshrr2060_250m*',
-                        'c_potl_seq_pwtea0020_250m*',
-                        'c_potl_seq_pwpin0020_250m*',
-                        'c_potl_seq_pwoco0020_250m*',
-                        'c_potl_seq_pwobr0020_250m*',
-                        'c_potl_seq_pwoak0020_250m*',
-                        'c_potl_seq_pweuc0020_250m*')
-rest_vrts <- foreach(p=rest_rast_patterns, .combine=c) %do% {
-    vrt_file <- tempfile(fileext='.vrt')
-    gdalbuildvrt(file.path(data_folder_local, p), vrt_file,
-                 te=output_extent, tr=c(xres(c_tstor_soil_rast), yres(c_tstor_soil_rast)))
-    return(vrt_file)
-}
-rest_c_rast <- stack(rest_vrts)
-names(rest_c_rast) <- gsub('_250m\\*', '', rest_rast_patterns)
-crs(rest_c_rast) <- crs('EPSG:4326')
-
-############
-# Ecosystems
-eco_vrt <- tempfile(fileext='.vrt')
-eco_in_files <- list.files(
-        file.path(
-            data_folder_local
-        ),
-        pattern='ecosystems_250m[-.0-9]*tif$',
-        full.names=TRUE
-)
-gdalbuildvrt(eco_in_files,
-             eco_vrt,
-             te=output_extent,
-             tr=c(xres(c_tstor_soil_rast),
-                  yres(c_tstor_soil_rast)))
-ecosystems_key <- data.frame(
-    id=c(1, 2, 3, 4, 5, 6, 7, 8),
-    ecosystem_name=c("Primary forest",
-                     "Secondary forest",
-                     "Grassland",
-                     "Wetlands",
-                     "Mangroves",
-                     "Salt marsh",
-                     "Seagrass",
-                     "Peatland")
-)
-eco_rast <- raster(eco_vrt)
-names(eco_rast) <- 'ecosystem'
-    
-##########################################
-# Population
-pop_vrt <- tempfile(fileext='.vrt')
-pop_in_files <- list.files(
-    file.path(
-        data_folder_deg_paper,
-        'Degradation_Paper',
-        'GEE_Rasters'),
-    pattern='pop_count_2000_05_10_15_20[-.0-9]*tif$',
-    full.names=TRUE
-)
-gdalbuildvrt(pop_in_files,
-             pop_vrt,
-             te=output_extent,
-             tr=c(xres(c_tstor_soil_rast),
-                  yres(c_tstor_soil_rast)))
-population <- stack(pop_vrt)
-names(population) <- c('pop_2000', 'pop_2005', 'pop_2010', 'pop_2015', 'pop_2020')
-#population <- crop(population, regions)
-NAvalue(population) <- -32768
-population <- population$pop_2020
-names(population) <- 'population'
-
-###############################################################################
-### Extract values
-rasts <- stack(c_tstor_soil_rast,
-               c_tstor_woody_rast$cb2020,
-               c_tstor_ic_rast,
-               eco_rast,
-               population,
-               rest_c_rast)
-names(rasts)[names(rasts) == 'cb2020'] <- 'c_tstor_woody'
-
-exact_extract(rasts,
-              sites_sp,
-              include_cell=TRUE,
-              include_cols=c('id', 'reporting_year')) %>%
-    rbindlist() %>%
-    rename(site_id=id,
-           pixel_id=cell) %>%
-    relocate(pixel_id, site_id, reporting_year, coverage_fraction) -> pixels
-print(nrow(pixels))
-pixels %>%
-    select(pixel_id, site_id, coverage_fraction) -> pixelsbysite
-pixels %>%
-    select(-site_id, -coverage_fraction) %>%
-    rename(id=pixel_id) %>%
-    distinct(id, reporting_year, .keep_all=TRUE) -> pixels
-print(nrow(pixels))
-
-# Get pixel areas in hectares, and join to pixels table
-sourceCpp('area_ha.cpp')
-exact_extract(
-    rasts[[1]],
-    sites_sp,
-    fun=area_ha,
-    summarize_df=TRUE,
-    include_xy=TRUE,
-    include_cell=TRUE,
-    xres=xres(rasts),
-    yres=yres(rasts),
-    use_cov_frac=FALSE) %>%
-    rename(id=cell) %>%
-    distinct(id, .keep_all=TRUE) %>%
-    right_join(pixels) -> pixels
-print(nrow(pixels))
-
-# rescale the population data to account for change in resolution
-population_original <- raster(pop_in_files[1])
-scaling <- (xres(population) * yres(population)) /
-           (xres(population_original) * yres(population_original))
-pixels$population <- pixels$population * scaling
-
-# Topcode population
-pixels$population[pixels$population > 5000] <- 5000
-pixels$population[is.na(pixels$population)] <- 0
-
-saveRDS(pixels, 'tables/pixels.rds')
-saveRDS(pixelsbysite, 'tables/pixelsbysite.rds')
+#########
+# Sequestration_potential
 
 sites <- readRDS(file.path(data_folder_local, 'tables/sites.rds'))
-pixels <- readRDS(file.path(data_folder_local, 'tables/pixels.rds'))
+pixels_no_seq <- readRDS(file.path(data_folder_local, 'tables/pixels_no_seq.rds'))
 pixelsbysite <- readRDS(file.path(data_folder_local, 'tables/pixelsbysite.rds'))
 
 # Recode sequestration potential from pixel data
 lengthyr = 1 # length of intervention in years
 left_join(
-    pixels,
+    pixels_no_seq,
     pixelsbysite,
     by=c('id'='pixel_id')
 ) %>%
@@ -417,18 +404,21 @@ left_join(
         )
     ) -> sequestration_potential
 saveRDS(sequestration_potential, file.path(data_folder_local, 'tables/c_potl_seq.rds'))
-pixels %>%
+pixels_no_seq %>%
     select(
         -starts_with('c_potl_seq')
     ) %>%
     left_join(
         sequestration_potential %>%
         select(id, c_potl_seq)
-    ) -> pixels_with_seq
-# Carry over maximum value of potential sequestraton within pixels
-pixels_with_seq %>% 
+    ) -> pixels_with_seq_preclean
+
+# Carry over maximum value of potential sequestration within pixels (could 
+    # happen if multiple sites code different restoration approaches for the 
+    # same pixel
+pixels_with_seq_preclean %>% 
     group_by(id) %>%
-    mutate(c_potl_seq=max(c_potl_seq)) %>%
+    mutate(c_potl_seq=max(c_potl_seq, na.rm=TRUE)) %>%
     distinct(id, .keep_all=TRUE) %>%
     ungroup() -> pixels_seq_unique
 saveRDS(

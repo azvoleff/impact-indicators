@@ -40,5 +40,5 @@ sites$id_numeric <- 1:nrow(sites)
 sites %>%
     as_tibble() %>%
     select(id, id_numeric, -shape) %>%
-    write_csv('site_id_key.csv')
+    write_csv('avoided_emissions_data/site_id_key.csv')
 saveRDS(sites, 'avoided_emissions_data/sites_cleaned_for_avoided_emissions.RDS')
