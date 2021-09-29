@@ -3,7 +3,11 @@ library(sf)
 library(units)
 library(lubridate)
 
-sites <- readRDS('tables/sites_sp.RDS')
+sites_data_folder <- '/home/rstudio/data/impacts_data/sites'
+tables_folder <- '/home/rstudio/data/impacts_data/tables'
+avoided_emissions_data_folder <- '/home/rstudio/data/impacts_data/avoided_emissions_data'
+
+sites <- readRDS(file.path(tables_folder, 'sites_sp.rds'))
 # Add a field to use as a flag for sites under/over 100 hectares
 sites_cea <- st_transform(sites, '+proj=cea')
 sites_cea$area_cea <- st_area(sites_cea)
@@ -40,5 +44,8 @@ sites$id_numeric <- 1:nrow(sites)
 sites %>%
     as_tibble() %>%
     select(id, id_numeric, -shape) %>%
-    write_csv('avoided_emissions_data/site_id_key.csv')
-saveRDS(sites, 'avoided_emissions_data/sites_cleaned_for_avoided_emissions.RDS')
+    write_csv(file.path(avoided_emissions_data_folder, 'site_id_key.csv'))
+saveRDS(sites,
+    file.path(avoided_emissions_data_folder,
+              'sites_cleaned_for_avoided_emissions.rds')
+)

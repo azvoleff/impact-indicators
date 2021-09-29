@@ -15,12 +15,9 @@ options(rasterTmpDir='/data/tmp/')
 
 options("optmatch_max_problem_size"=Inf)
 
-#data_folder <- 'D:/Data/Impacts_Data'
-#data_folder_avoided_emissions <- 'avoided_emissions_data'
-
-data_folder <- '/home/rstudio/data'
-data_folder_avoided_emissions <- '/home/rstudio/data/impacts_data'
-code_folder <- '/data/code/impact-indicators'
+data_folder <- '~/data/'
+data_folder_avoided_emissions <- '/home/rstudio/data/impacts_data/avoided_emissions_data'
+code_folder <- '~/data/code/impact-indicators'
 
 gdal_crop <- function(r, s) {
     if (filename(r) == '') {
@@ -90,7 +87,7 @@ write_csv(data.frame(names=names(d)), file='all_covariates_names.csv')
 ###############################################################################
 ###  Load sites and covariates
 
-sites <- readRDS(file.path(data_folder_avoided_emissions, 'sites_cleaned_for_avoided_emissions.RDS'))
+sites <- readRDS(file.path(data_folder_avoided_emissions, 'sites_cleaned_for_avoided_emissions.rds'))
 dim(sites)
 
 # Drop sites with no overlap with GADM (since they'd throw errors later during 

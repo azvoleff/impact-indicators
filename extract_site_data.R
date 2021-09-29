@@ -11,9 +11,12 @@ library(foreach)
 library(Rcpp)
 
 
-#data_folder_local <- 'E:/Data/Impacts_Data'
-data_folder_local <- 'D:/Data/Impacts_Data'
-#data_folder_local <- '/home/rstudio/data/impacts_data'
+#data_folder_input <- 'E:/Data/Impacts_Data'
+#data_folder_input <- 'D:/Data/Impacts_Data'
+data_folder_input <- '/home/rstudio/data/impacts_data/inputs_for_pixels'
+sites_data_folder <- '/home/rstudio/data/impacts_data/sites'
+tables_folder <- '/home/rstudio/data/impacts_data/tables'
+code_folder <- '/home/rstudio/data/code/impact-indicators'
 
 unjoin_table <- function(starts_with_text, id_name) {
     variablebysite <- sites %>%
@@ -102,7 +105,7 @@ load_as_vrt <- function(folder, pattern, band=FALSE, raster=TRUE) {
 ###############################################################################
 ### Load sites
 
-sites <- st_read(file.path("sites", "Final_PostVetting_FY2021.gdb"))
+sites <- st_read(file.path(sites_data_folder, "Final_PostVetting_FY2021.gdb"))
 sites <- st_zm(sites) # Drop zm coords
 sites %>%
     rename(id = CI_ID) %>%
@@ -114,13 +117,13 @@ sites %>%
     mutate(validity = st_is_valid(., reason=TRUE)) %>%
     filter(validity != 'Valid Geometry') %>%
     as_tibble() %>%
-    select(-shape) %>%
-    write_csv('site_validity.csv')
+    dplyr::select(-shape) %>%
+    write_csv(file.path(sites_data_folder, 'site_validity.csv'))
 
 sites %>%
     mutate(validity = st_is_valid(.)) %>%
     filter(validity == TRUE) %>%
-    select(-validity) -> sites
+    dplyr::select(-validity) -> sites
 
 # Fix error in SLS names
 # table
@@ -184,28 +187,28 @@ sites <- dplyr::select(sites,
                 -country)
 
 sites_sp %>%
-    select(id, shape) %>%
+    dplyr::select(id, shape) %>%
     full_join(
-        select(sites, -shape)
+        dplyr::select(sites, -shape)
     ) -> sites_sp_save
 
-saveRDS(sites, 'tables/sites.rds')
-saveRDS(sites_sp_save, 'tables/sites_sp.rds')
-saveRDS(sls, 'tables/sls.rds')
-saveRDS(slsbysite, 'tables/slsbysite.rds')
-saveRDS(countries, 'tables/countries.rds')
-saveRDS(countrybysite, 'tables/countrybysite.rds')
-saveRDS(interventions, 'tables/interventions.rds')
-saveRDS(interventionbysite, 'tables/interventionbysite.rds')
-saveRDS(startags, 'tables/startags.rds')
-saveRDS(startagbysite, 'tables/startagbysite.rds')
-saveRDS(divisions, 'tables/divisions.rds')
-saveRDS(divisionbysite, 'tables/divisionbysite.rds')
-saveRDS(sites_sp_save, 'tables/sites_sp.rds')
+saveRDS(sites, file.path(tables_folder, 'sites.rds'))
+saveRDS(sites_sp_save, file.path(tables_folder, 'sites_sp.rds'))
+saveRDS(sls, file.path(tables_folder, 'sls.rds'))
+saveRDS(slsbysite, file.path(tables_folder, 'slsbysite.rds'))
+saveRDS(countries, file.path(tables_folder, 'countries.rds'))
+saveRDS(countrybysite, file.path(tables_folder, 'countrybysite.rds'))
+saveRDS(interventions, file.path(tables_folder, 'interventions.rds'))
+saveRDS(interventionbysite, file.path(tables_folder, 'interventionbysite.rds'))
+saveRDS(startags, file.path(tables_folder, 'startags.rds'))
+saveRDS(startagbysite, file.path(tables_folder, 'startagbysite.rds'))
+saveRDS(divisions, file.path(tables_folder, 'divisions.rds'))
+saveRDS(divisionbysite, file.path(tables_folder, 'divisionbysite.rds'))
+saveRDS(sites_sp_save, file.path(tables_folder, 'sites_sp.rds'))
 # Save sites for ingestion to GEE (filtering out all columns except for id)
 st_write(
-    select(sites_sp, id),
-    file.path("sites", "Final_PostVetting_FY2021_for_gee.shp"),
+    dplyr::select(sites_sp, id),
+    file.path(sites_data_folder, "Final_PostVetting_FY2021_for_gee.shp"),
     delete_dsn=TRUE
 )
 
@@ -214,11 +217,11 @@ st_write(
 
 #############
 # Carbon (woody, soil, irrecoverable)
-soil_c_rast <- load_as_vrt(data_folder_local, 'soc_bc_250m_scaled100_2020[-.0-9]*tif$')
+soil_c_rast <- load_as_vrt(data_folder_input, 'soc_bc_250m_scaled100_2020[-.0-9]*tif$')
 names(soil_c_rast) <- 'c_tstor_soil'
-biomass_c_rast <- load_as_vrt(data_folder_local, 'biomass_carbon_gfw_bc_250m_scaled100_2020[-.0-9]*tif$')
+biomass_c_rast <- load_as_vrt(data_folder_input, 'biomass_carbon_gfw_bc_250m_scaled100_2020[-.0-9]*tif$')
 names(biomass_c_rast) <- 'c_tstor_woody'
-c_tstor_ic_rast <- load_as_vrt(data_folder_local, "irrecoverable_carbon_250m_2018[-.0-9]*tif$")
+c_tstor_ic_rast <- load_as_vrt(data_folder_input, "irrecoverable_carbon_250m_2018[-.0-9]*tif$")
 names(c_tstor_ic_rast) <- 'c_tstor_ic'
 c_rasts <- stack(soil_c_rast, biomass_c_rast, c_tstor_ic_rast)
 crs(c_rasts) <- crs('EPSG:4326')
@@ -245,14 +248,14 @@ rest_rast_patterns <- c('c_potl_seq_agfor0020_250m[-.0-9]*',
                         'c_potl_seq_pwoak0020_250m[-.0-9]*',
                         'c_potl_seq_pweuc0020_250m[-.0-9]*')
 rest_c_rast <- foreach(p=rest_rast_patterns, .combine=raster::stack) %do% {
-    load_as_vrt(data_folder_local, p)
+    load_as_vrt(data_folder_input, p)
 }
 names(rest_c_rast) <- gsub('_250m\\[-\\.0-9\\]\\*', '', rest_rast_patterns)
 crs(rest_c_rast) <- crs('EPSG:4326')
 
 ############
 # Ecosystems
-eco_rast <- load_as_vrt(data_folder_local, 'ecosystems_250m[-.0-9]*tif$')
+eco_rast <- load_as_vrt(data_folder_input, 'ecosystems_250m[-.0-9]*tif$')
 ecosystems_key <- data.frame(
     id=c(1, 2, 3, 4, 5, 6, 7, 8),
     ecosystem_name=c("Primary forest",
@@ -269,13 +272,13 @@ names(eco_rast) <- 'ecosystem'
 ##########################################
 # Population
 pop_vrt <- tempfile(fileext='.vrt')
-gdalbuildvrt(file.path(data_folder_local, 'ppp_2020_1km_Aggregated.tif'),
+gdalbuildvrt(file.path(data_folder_input, 'ppp_2020_1km_Aggregated.tif'),
              pop_vrt,
              te=output_extent,
              tr=c(xres(c_rasts),
                   yres(c_rasts)))
 population <- raster(pop_vrt)
-names(population) <- c('pop_2020')
+names(population) <- c('population')
 
 ###############################################################################
 ### Extract values
@@ -293,23 +296,33 @@ exact_extract(rasts,
            pixel_id=cell) %>%
     relocate(pixel_id, site_id, reporting_year, coverage_fraction) -> pixels_no_seq
 print(nrow(pixels_no_seq))
+
+
 # Take account of fact that some pixels within some sites might have been split 
 # across the polygons created by the quarter_split lines above, and that these 
 # pixels therefore need to be joined together within polygons so that there 
 # aren't duplicate pixel IDs within the same polygon
+#pixels_no_seq %>%
+#    dplyr::select(pixel_id, site_id, coverage_fraction) %>%
+#    group_by(site_id, pixel_id) %>%
+#    summarise(coverage_fraction = sum(coverage_fraction)) -> pixelsbysite
+
+# TODO: fix the above problem if there is a way to process faster. For now
+# ignore the above - recognizing it is an insignificant issue overall as it only
+# affects a small number of pixels and only in very large sites
 pixels_no_seq %>%
-    select(pixel_id, site_id, coverage_fraction) %>%
-    group_by(site_id, pixel_id) %>%
-    summarise(coverage_fraction = sum(coverage_fraction)) -> pixelsbysite
+    dplyr::select(pixel_id, site_id, coverage_fraction) %>%
+    distinct(pixel_id, site_id, .keep_all=TRUE) -> pixelsbysite
+print(nrow(pixelsbysite))    
 
 pixels_no_seq %>%
-    select(-site_id, -coverage_fraction) %>%
+    dplyr::select(-site_id, -coverage_fraction) %>%
     rename(id=pixel_id) %>%
     distinct(id, reporting_year, .keep_all=TRUE) -> pixels_no_seq
 print(nrow(pixels_no_seq))
 
 # Get pixel areas in hectares, and join to pixels_no_seq table
-sourceCpp('area_ha.cpp')
+sourceCpp(file.path(code_folder, 'area_ha.cpp'))
 exact_extract(
     rasts[[1]],
     sites_sp,
@@ -327,41 +340,22 @@ print(nrow(pixels_no_seq))
 
 # rescale the population data to account for change in resolution
 population_original <- raster(
-    file.path(data_folder_local, 'ppp_2020_1km_Aggregated.tif')
+    file.path(data_folder_input, 'ppp_2020_1km_Aggregated.tif')
 )
 scaling <- (xres(population) * yres(population)) /
            (xres(population_original) * yres(population_original))
 pixels_no_seq$population <- pixels_no_seq$population * scaling
 
-# Topcode population
-pixels_no_seq$population[pixels_no_seq$population > 5000] <- 5000
-pixels_no_seq$population[is.na(pixels_no_seq$population)] <- 0
-
-saveRDS(pixels_no_seq, 'tables/pixels_no_seq.rds')
-saveRDS(pixelsbysite, 'tables/pixelsbysite.rds')
-
-#########
-# Species
-sp_raw <- read_csv('species_all_sites_CR-EN-VU.csv')
-sp_raw %>%
-    select(-site_id) %>%
-    distinct() %>%
-    mutate(id = 1:n()) %>%
-    relocate(id) -> species
-saveRDS(species, 'tables/species.rds')
-left_join(sp_raw, species) %>%
-    rename(species_id=id) %>%
-    select(site_id, species_id) -> speciesbysite 
-saveRDS(speciesbysite, 'tables/speciesbysite.rds')
-
+saveRDS(pixels_no_seq, file.path(tables_folder, 'pixels_no_seq.rds'))
+saveRDS(pixelsbysite, file.path(tables_folder, 'pixelsbysite.rds'))
 
 
 #########
 # Sequestration_potential
 
-sites <- readRDS(file.path(data_folder_local, 'tables/sites.rds'))
-pixels_no_seq <- readRDS(file.path(data_folder_local, 'tables/pixels_no_seq.rds'))
-pixelsbysite <- readRDS(file.path(data_folder_local, 'tables/pixelsbysite.rds'))
+sites <- readRDS(file.path(tables_folder, 'sites.rds'))
+pixels_no_seq <- readRDS(file.path(tables_folder, 'pixels_no_seq.rds'))
+pixelsbysite <- readRDS(file.path(tables_folder, 'pixelsbysite.rds'))
 
 # Recode sequestration potential from pixel data
 lengthyr = 1 # length of intervention in years
@@ -373,7 +367,7 @@ left_join(
     left_join(
         (
          sites %>%
-            select(id, restoration_type)
+             dplyr::select(id, restoration_type)
         )
         , by=c('site_id'='id')
     ) %>%
@@ -403,9 +397,10 @@ left_join(
             .default=0
         )
     ) -> sequestration_potential
-saveRDS(sequestration_potential, file.path(data_folder_local, 'tables/c_potl_seq.rds'))
+saveRDS(sequestration_potential, file.path(tables_folder, 'c_potl_seq.rds'))
+
 pixels_no_seq %>%
-    select(
+    dplyr::select(
         -starts_with('c_potl_seq')
     ) %>%
     left_join(
@@ -414,25 +409,46 @@ pixels_no_seq %>%
     ) -> pixels_with_seq_preclean
 
 # Carry over maximum value of potential sequestration within pixels (could 
-    # happen if multiple sites code different restoration approaches for the 
-    # same pixel
-pixels_with_seq_preclean %>% 
-    group_by(id) %>%
-    mutate(c_potl_seq=max(c_potl_seq, na.rm=TRUE)) %>%
-    distinct(id, .keep_all=TRUE) %>%
-    ungroup() -> pixels_seq_unique
+# happen if multiple sites code different restoration approaches for the 
+# same pixel
+#pixels_with_seq_preclean %>% 
+#    group_by(id) %>%
+#    mutate(c_potl_seq=max(c_potl_seq, na.rm=TRUE)) %>%
+#    distinct(id, .keep_all=TRUE) %>%
+#    ungroup() -> pixels_seq_unique
+
+# Below doesn't seem to work right, otherwise would be a faster way to do the
+# above carry over
+#pixels_with_seq_preclean_dt <- data.table(pixels_with_seq_preclean)
+#pixels_seq_unique <- pixels_with_seq_preclean_dt[
+#    pixels_with_seq_preclean_dt[, .I[which.max(c_potl_seq)], by=id]$V1
+#]
+
+# Since above two attempts at removing dupes fail, use a simple distinct on
+# id for now
+pixels_with_seq_preclean %>%
+    distinct(id, .keep_all=TRUE) -> pixels_seq_unique
 saveRDS(
-    select(
-        pixels_seq_unique,
-        id,
-        area_ha,
-        c_potl_seq
-    ),
+    pixels_seq_unique,
     file.path(
-        data_folder_local,
-        'tables/pixels_with_seq.rds'
+        tables_folder,
+        'pixels_with_seq.rds'
     )
 )
 
 nrow(pixels_seq_unique)
 table(pixels_seq_unique$c_potl_seq)
+
+#########
+# Species
+sp_raw <- read_csv('species_all_sites_CR-EN-VU.csv')
+sp_raw %>%
+    dplyr::select(-site_id) %>%
+    distinct() %>%
+    mutate(id = 1:n()) %>%
+    relocate(id) -> species
+saveRDS(species, 'tables/species.rds')
+left_join(sp_raw, species) %>%
+    rename(species_id=id) %>%
+    dplyr::select(site_id, species_id) -> speciesbysite 
+saveRDS(speciesbysite, file.path(tables_folder, 'speciesbysite.rds'))

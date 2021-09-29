@@ -1,4 +1,5 @@
 library(tidyverse)
+library(multidplyr)
 library(data.table)
 
 sls <- data.table(readRDS('tables/sls.rds'))
@@ -53,19 +54,57 @@ setkey(sites, id)
 pixels <- pixels[sites, nomatch=0, allow.cartesian=TRUE]
 saveRDS(pixels, 'tables/pixels_with_sites.rds')
 
-sitespixels %>%
-    group_by(sls_id) %>%
-    summarise(area_ha=sum(area_ha * coverage_fraction))
+#distinct(id, .keep_all=TRUE) %>%
 
-sitespixels %>%
-    group_by(id) %>%
-    summarise(area_ha=sum(area_ha * coverage_fraction))
+setwd('/home/rstudio/data/impacts_data')
+pixels <- readRDS('tables/pixels_with_sites.rds')
+pixels <- tbl_df(pixels)
 
-sitespixels %>%
-    group_by(id) %>%
-    summarise(area_ha=sum(area_ha * coverage_fraction))
+# cluster <- new_cluster(14)
+# cluster_library(cluster, "dplyr")
+# pixels_par <- pixels %>% group_by(site_id, sls_name) %>% partition(cluster)
+    
+pixels %>%
+    group_by(sls_name, id) %>%
+    summarise(
+        which_max = which.max(coverage_fraction),
+        coverage_fraction=coverage_fraction[which_max],
+        area_ha=area_ha[which_max],
+        woody_carbon_stored=c_tstor_woody[which_max],
+        soil_carbon_stored=c_tstor_soil[which_max],
+        irr_carbon_stored=c_tstor_ic[which_max],
+        population=population[which_max]
+    ) %>%
+    group_by(sls_name) %>%
+    summarise(
+        area_ha=sum(area_ha * coverage_fraction),
+        woody_carbon_stored=sum(woody_carbon_stored * coverage_fraction),
+        soil_carbon_stored=sum(soil_carbon_stored * coverage_fraction),
+        irr_carbon_stored=sum(irr_carbon_stored * coverage_fraction),
+        population=sum(population * coverage_fraction)
+    ) %>%
+    write_csv('stats_by_sls.csv')
 
-names(sitespixels)
+pixels %>%
+    group_by(site_id, id) %>%
+    summarise(
+        which_max = which.max(coverage_fraction),
+        coverage_fraction=coverage_fraction[which_max],
+        area_ha=area_ha[which_max],
+        woody_carbon_stored=c_tstor_woody[which_max],
+        soil_carbon_stored=c_tstor_soil[which_max],
+        irr_carbon_stored=c_tstor_ic[which_max],
+        population=population[which_max]
+    ) %>%
+    group_by(site_id) %>%
+    summarise(
+        area_ha=sum(area_ha * coverage_fraction),
+        woody_carbon_stored=sum(woody_carbon_stored * coverage_fraction),
+        soil_carbon_stored=sum(soil_carbon_stored * coverage_fraction),
+        irr_carbon_stored=sum(irr_carbon_stored * coverage_fraction),
+        population=sum(population * coverage_fraction)
+    ) %>%
+    write_csv('stats_by_site.csv')
 
 
 sites_sp_save <- readRDS('tables/sites_sp.rds')

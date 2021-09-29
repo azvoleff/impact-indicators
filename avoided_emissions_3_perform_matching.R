@@ -8,8 +8,10 @@ library(biglm)
 library(tictoc)
 library(doParallel)
 
-data_folder <- '/home/rstudio/data/impacts_data'
-data_folder <- 'D:/Code/LandDegradation/impact_indicators/extract-indicators/avoided_emissions_data'
+data_folder_impacts <- '/home/rstudio/data/impacts_data'
+data_folder_avoided_emissions <- '/home/rstudio/data/impacts_data/avoided_emissions_data'
+#data_folder_avoided_emissions <- 
+#'D:/Code/LandDegradation/impact_indicators/extract-indicators/avoided_emissions_data'
 
 options("optmatch_max_problem_size"=Inf)
 
@@ -86,11 +88,11 @@ match_ae <- function(d, f) {
 
 ###############################################################################
 ###  Load sites and covariates
-treatment_key <- readRDS(file.path(data_folder, 'treatment_cell_key.RDS'))
+treatment_key <- readRDS(file.path(data_folder_avoided_emissions, 'treatment_cell_key.RDS'))
 readRDS(
     file.path(
-        data_folder,
-        'sites_cleaned_for_avoided_emissions.RDS'
+        data_folder_avoided_emissions,
+        'sites_cleaned_for_avoided_emissions.rds'
     )
 ) %>%
     select(-shape) %>%
@@ -109,27 +111,25 @@ filter_groups <- function(vals) {
     return(vals)
 }
 
-this_id <- unique(treatment_key$id_numeric)[2]
-
 ###############################################################################
 ###  Run matching
-cl <- parallel::makeCluster(16)
+cl <- parallel::makeCluster(14)
 doParallel::registerDoParallel(cl)
 set.seed(31)
 
-base_data <- readRDS(file.path(data_folder, 'treatments_and_controls.RDS'))
+base_data <- readRDS(file.path(data_folder_avoided_emissions, 'treatments_and_controls.RDS'))
 
 ae <- foreach(
     this_id=unique(treatment_key$id_numeric),
     .combine=c,
     .inorder=FALSE,
     .packages=c('tidyverse', 'optmatch', 'sf', 'foreach')
-) %do% {
+) %dopar% {
     ###############
     # Load datasets
     
     site <- filter(sites, id_numeric == this_id)
-    match_path <- file.path(data_folder, 'matches', paste0('m_', this_id, '.RDS'))
+    match_path <- file.path(data_folder_avoided_emissions, 'matches', paste0('m_', this_id, '.RDS'))
     if (file.exists(match_path)) {
         print(paste0('Skipping ', this_id, '. Already processed.'))
         return(NULL)
@@ -212,7 +212,7 @@ ae <- foreach(
     # of deforestation data preceding the year of establishment. For sites 
     # estab prior to 2005, don't match on defor rate
     estab_year <- site$ci_start_year
-    f <- readRDS(file.path(data_folder, 'formula.RDS'))
+    f <- readRDS(file.path(data_folder_avoided_emissions, 'formula.RDS'))
     if (estab_year >= 2005) {
         init <- vals[, grepl(paste0('fc_20', substr(estab_year - 5, 3, 4)), names(vals))]
         final <- vals[,grepl(paste0('fc_20', substr(estab_year, 3, 4)), names(vals))]
@@ -258,11 +258,11 @@ ae <- foreach(
 
 ###############################################################################
 # Load all output and resave in one file
-m <- foreach(f=list.files(file.path(data_folder, 'matches'), pattern ='^m_[0-9]*.RDS$'), 
+m <- foreach(f=list.files(file.path(data_folder_avoided_emissions, 'matches'), pattern ='^m_[0-9]*.RDS$'), 
               .combine=foreach_rbind) %dopar% {
-    readRDS(file.path(data_folder, 'matches', f))
+    readRDS(file.path(data_folder_avoided_emissions, 'matches', f))
 }
-saveRDS(m, file.path(data_folder, 'matches', 'm_ALL.RDS'))
+saveRDS(m, file.path(data_folder_avoided_emissions, 'matches', 'm_ALL.RDS'))
 
 
 ###############################################################################
@@ -276,14 +276,14 @@ get_chunk <- function(d, n, n_chunks=10) {
 
 # Process in chunks to save memory
 n_chunks <- 20
-data_files <- list.files(file.path(data_folder, 'matches'),
+data_files <- list.files(file.path(data_folder_avoided_emissions, 'matches'),
                          pattern ='^m_[0-9]*.RDS$')
 m_processed <- foreach (i=1:n_chunks, .combine=bind_rows) %do% {
     print(paste0('Progress: ', ((i-1)/n_chunks)*100, '%'))
     tic()
     this_m <- foreach(f=get_chunk(data_files, i, n_chunks),
                   .combine=bind_rows, .inorder=FALSE) %do% {
-        readRDS(file.path(data_folder, 'matches', f)) %>%
+        readRDS(file.path(data_folder_avoided_emissions, 'matches', f)) %>%
             select(cell,
                    id,
                    area_ha,
@@ -352,7 +352,7 @@ m_processed %>%
     rename(id=cell)  %>%
     ungroup() %>%
     select(-match_group) -> pixels_ae
-saveRDS(pixels_ae, 'tables/pixels_ae.rds')
+saveRDS(pixels_ae, file.path(data_folder_impacts, 'tables', 'pixels_ae.rds'))
 
 m_processed %>%
     distinct(cell, id) %>%
@@ -361,15 +361,4 @@ m_processed %>%
         cell_id=cell
     ) %>%
     relocate(cell_id) -> pixels_ae_bysite
-
-
-table(avoided_emissions$forest_loss_avoided_ha > 0)
-table(avoided_emissions$forest_loss_avoided_ha < 0)
-sum(avoided_emissions$forest_loss_avoided_ha)
-sum(avoided_emissions$emissions_avoided_mgco2e)
-
-nrow(avoided_emissions)
-length(unique(avoided_emissions$cell))
-
-saveRDS(m_site, file.path('avoided_emissions_data'. 'output_raw_by_site.rds')
-write_csv(m_site, file.path('avoided_emissions_data'. 'output_raw_by_site.csv')
+saveRDS(pixels_ae_bysite, file.path(data_folder_impacts, 'tables', 'pixels_aebysite.rds'))
