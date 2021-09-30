@@ -361,4 +361,4 @@ m_processed %>%
         cell_id=cell
     ) %>%
     relocate(cell_id) -> pixels_ae_bysite
-saveRDS(pixels_ae_bysite, file.path(data_folder_impacts, 'tables', 'pixels_aebysite.rds'))
+saveRDS(pixels_ae_bysite, file.path(data_folder_impacts, 'tables', 'pixels_ae_bysite.rds'))

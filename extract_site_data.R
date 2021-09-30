@@ -11,12 +11,15 @@ library(foreach)
 library(Rcpp)
 
 
-#data_folder_input <- 'E:/Data/Impacts_Data'
-#data_folder_input <- 'D:/Data/Impacts_Data'
-data_folder_input <- '/home/rstudio/data/impacts_data/inputs_for_pixels'
-sites_data_folder <- '/home/rstudio/data/impacts_data/sites'
-tables_folder <- '/home/rstudio/data/impacts_data/tables'
-code_folder <- '/home/rstudio/data/code/impact-indicators'
+# data_folder_input <- '/home/rstudio/data/impacts_data/inputs_for_pixels'
+# sites_data_folder <- '/home/rstudio/data/impacts_data/sites'
+# tables_folder <- '/home/rstudio/data/impacts_data/tables'
+# code_folder <- '/home/rstudio/data/code/impact-indicators'
+
+data_folder_input <- 'D:/Data/Impacts_Data'
+sites_data_folder <- 'D:/Data/Impacts_Data/sites'
+tables_folder <- 'D:/Data/Impacts_Data/tables'
+code_folder <- 'D:/Code/LandDegradation/impact_indicators/extract-indicators'
 
 unjoin_table <- function(starts_with_text, id_name) {
     variablebysite <- sites %>%
@@ -192,7 +195,7 @@ sites_sp %>%
         dplyr::select(sites, -shape)
     ) -> sites_sp_save
 
-saveRDS(sites, file.path(tables_folder, 'sites.rds'))
+saveRDS(sites, file.path(tables_folder, 'sites_cleaned_cols.rds'))
 saveRDS(sites_sp_save, file.path(tables_folder, 'sites_sp.rds'))
 saveRDS(sls, file.path(tables_folder, 'sls.rds'))
 saveRDS(slsbysite, file.path(tables_folder, 'slsbysite.rds'))
@@ -353,7 +356,7 @@ saveRDS(pixelsbysite, file.path(tables_folder, 'pixelsbysite.rds'))
 #########
 # Sequestration_potential
 
-sites <- readRDS(file.path(tables_folder, 'sites.rds'))
+sites <- readRDS(file.path(tables_folder, 'sites_cleaned_cols.rds'))
 pixels_no_seq <- readRDS(file.path(tables_folder, 'pixels_no_seq.rds'))
 pixelsbysite <- readRDS(file.path(tables_folder, 'pixelsbysite.rds'))
 
@@ -441,13 +444,13 @@ table(pixels_seq_unique$c_potl_seq)
 
 #########
 # Species
-sp_raw <- read_csv('species_all_sites_CR-EN-VU.csv')
+sp_raw <- read_csv(file.path(data_folder_input, 'species', 'species_all_sites_CR-EN-VU.csv'))
 sp_raw %>%
     dplyr::select(-site_id) %>%
     distinct() %>%
     mutate(id = 1:n()) %>%
     relocate(id) -> species
-saveRDS(species, 'tables/species.rds')
+saveRDS(species, file.path(tables_folder, 'species.rds'))
 left_join(sp_raw, species) %>%
     rename(species_id=id) %>%
     dplyr::select(site_id, species_id) -> speciesbysite 
