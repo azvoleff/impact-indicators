@@ -13,8 +13,6 @@ data_folder_avoided_emissions <- '/home/rstudio/data/impacts_data/avoided_emissi
 #data_folder_avoided_emissions <- 
 #'D:/Code/LandDegradation/impact_indicators/extract-indicators/avoided_emissions_data'
 
-options("optmatch_max_problem_size"=Inf)
-
 MAX_TREATMENT <- 1000
 CONTROL_MULTIPLIER <- 50
     
@@ -125,6 +123,8 @@ ae <- foreach(
     .inorder=FALSE,
     .packages=c('tidyverse', 'optmatch', 'sf', 'foreach')
 ) %dopar% {
+    options("optmatch_max_problem_size"=1e8)
+
     ###############
     # Load datasets
     

@@ -11,15 +11,15 @@ library(foreach)
 library(Rcpp)
 
 
-# data_folder_input <- '/home/rstudio/data/impacts_data/inputs_for_pixels'
-# sites_data_folder <- '/home/rstudio/data/impacts_data/sites'
-# tables_folder <- '/home/rstudio/data/impacts_data/tables'
-# code_folder <- '/home/rstudio/data/code/impact-indicators'
+data_folder_input <- '/home/rstudio/data/impacts_data/inputs_for_pixels'
+sites_data_folder <- '/home/rstudio/data/impacts_data/sites'
+tables_folder <- '/home/rstudio/data/impacts_data/tables'
+code_folder <- '/home/rstudio/data/code/impact-indicators'
 
-data_folder_input <- 'D:/Data/Impacts_Data'
-sites_data_folder <- 'D:/Data/Impacts_Data/sites'
-tables_folder <- 'D:/Data/Impacts_Data/tables'
-code_folder <- 'D:/Code/LandDegradation/impact_indicators/extract-indicators'
+# data_folder_input <- 'D:/Data/Impacts_Data'
+# sites_data_folder <- 'D:/Data/Impacts_Data/sites'
+# tables_folder <- 'D:/Data/Impacts_Data/tables'
+# code_folder <- 'D:/Code/LandDegradation/impact_indicators/extract-indicators'
 
 unjoin_table <- function(starts_with_text, id_name) {
     variablebysite <- sites %>%
@@ -108,7 +108,7 @@ load_as_vrt <- function(folder, pattern, band=FALSE, raster=TRUE) {
 ###############################################################################
 ### Load sites
 
-sites <- st_read(file.path(sites_data_folder, "Final_PostVetting_FY2021.gdb"))
+sites <- st_read(file.path(sites_data_folder, "Final_FY21.gdb"))
 sites <- st_zm(sites) # Drop zm coords
 sites %>%
     rename(id = CI_ID) %>%
