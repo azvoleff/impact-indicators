@@ -1,0 +1,22 @@
+TRUNCATE
+countries,
+countrybysite,
+divisions,
+divisionbysite,
+ecosystems,
+interventions,
+interventionbysite,
+pixels,
+pixels_ae,
+pixels_ae_bysite,
+pixelsbysite,
+sites,
+sls,
+slsbysite,
+species,
+speciesbysite,
+startagbysite,
+startags
+CASCADE;
+
+cascades to manualdata and indirectspeciesbysite
