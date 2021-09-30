@@ -180,14 +180,27 @@ countries <- ISO_3166_1 %>%
     relocate(id) %>%
     rename_all(tolower)
 
-sites <- dplyr::select(sites,
-                -starts_with('ci_sls'),
-                -starts_with('ci_division'),
-                -starts_with('star_tag'),
-                -starts_with('intervention_type'),
-                -country_iso_num_code,
-                -area_ha,
-                -country)
+sites <- dplyr::select(
+    sites,
+    -starts_with('ci_sls'),
+    -starts_with('ci_division'),
+    -starts_with('star_tag'),
+    -starts_with('intervention_type'),
+    -country_iso_num_code,
+    -area_ha,
+    -country
+    -join_count,
+    -target_fid,
+    -join_fid,
+    -number,
+    -numbertext,
+    -area_km2,
+    -name,
+    -iso3,
+    -name_vmap,
+    -gaborone,
+    -notes
+)
 
 sites_sp %>%
     dplyr::select(id, shape) %>%
@@ -270,6 +283,7 @@ ecosystems_key <- data.frame(
                      "Seagrass",
                      "Peatland")
 )
+saveRDS(ecosystems_key, file.path(tables_folder, 'ecosystems.rds'))
 names(eco_rast) <- 'ecosystem'
     
 ##########################################
