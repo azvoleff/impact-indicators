@@ -13,7 +13,7 @@ tables_folder <- 'D:/Data/Impacts_Data/tables'
 #
 #
 #
-# pixels <- readRDS(file.path(file.path(tables_folder, 'pixels.rds')))
+# pixels <- readRDS(file.path(tables_folder, 'pixels_with_seq.rds'))
 # pixelsbysite <- readRDS(file.path(file.path(tables_folder, 'pixelsbysite.rds')))
 #
 # nrow(pixelsbysite)
@@ -65,7 +65,7 @@ table(sites$division_name == bna_name)
 sites <- sites[sites$division_name != bna_name, ]
 
 
-pixels <- data.table(readRDS(file.path(tables_folder, 'pixels.rds')))
+pixels <- data.table(readRDS(file.path(tables_folder, 'pixels_with_seq.rds'))
 pixelsbysite <- data.table(readRDS(file.path(tables_folder, 'pixelsbysite.rds')))
 
 setkey(pixels, id)
