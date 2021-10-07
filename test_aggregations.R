@@ -2,16 +2,34 @@ library(tidyverse)
 library(multidplyr)
 library(data.table)
 
-sls <- data.table(readRDS('tables/sls.rds'))
-countries <- data.table(readRDS('tables/countries.rds'))
-divisions <- data.table(readRDS('tables/divisions.rds'))
+tables_folder <- 'D:/Data/Impacts_Data/tables'
+
+
+# hist(pixels$c_tstor_soil[pixels$c_tstor_soil > 0] / 100 * pixels$area_ha[pixels$c_tstor_soil > 0])
+# hist(pixels$c_tstor_woody[pixels$c_tstor_woody > 0] / 100 *  / pixels$area_ha[pixels$c_tstor_woody > 0])
+#
+# hist(pixels$c_tstor_soil[pixels$c_tstor_soil > 0] / 100 / pixels$area_ha[pixels$c_tstor_woody > 0])
+# hist(pixels$c_tstor_woody[pixels$c_tstor_woody > 0] / 100)
+#
+#
+#
+# pixels <- readRDS(file.path(file.path(tables_folder, 'pixels.rds')))
+# pixelsbysite <- readRDS(file.path(file.path(tables_folder, 'pixelsbysite.rds')))
+#
+# nrow(pixelsbysite)
+# nrow(pixels)
+#
+#
+sls <- data.table(readRDS(file.path(tables_folder, 'sls.rds')))
+countries <- data.table(readRDS(file.path(tables_folder, 'countries.rds')))
+divisions <- data.table(readRDS(file.path(tables_folder, 'divisions.rds')))
 setkey(sls, id)
 setkey(countries, id)
 setkey(divisions, id)
 
-slsbysite <- data.table(readRDS('tables/slsbysite.rds'))
-countrybysite <- data.table(readRDS('tables/countrybysite.rds'))
-divisionbysite <- data.table(readRDS('tables/divisionbysite.rds'))
+slsbysite <- data.table(readRDS(file.path(tables_folder, 'slsbysite.rds')))
+countrybysite <- data.table(readRDS(file.path(tables_folder, 'countrybysite.rds')))
+divisionbysite <- data.table(readRDS(file.path(tables_folder, 'divisionbysite.rds')))
 setkey(slsbysite, sls_id)
 setkey(countrybysite, country_id)
 setkey(divisionbysite, division_id)
@@ -28,7 +46,7 @@ setnames(divisions, "name", "division_name")
 
 countries <- countries[, .(site_id, country_name)]
 
-sites <- data.table(readRDS('tables/sites.rds'))
+sites <- data.table(readRDS(file.path(tables_folder, 'sites.rds')))
 # Remove shape column since it is large and not needed
 sites[, shape:=NULL]
 
@@ -41,8 +59,14 @@ sites <- sites[sls, nomatch=0]
 sites <- sites[countries, nomatch=0]
 sites <- sites[divisions, nomatch=0]
 
-pixels <- data.table(readRDS('tables/pixels.rds'))
-pixelsbysite <- data.table(readRDS('tables/pixelsbysite.rds'))
+bna_name <- 'C4O - Blue Nature Alliance'
+table(sites$division_name == bna_name)
+
+sites <- sites[sites$division_name != bna_name, ]
+
+
+pixels <- data.table(readRDS(file.path(tables_folder, 'pixels.rds')))
+pixelsbysite <- data.table(readRDS(file.path(tables_folder, 'pixelsbysite.rds')))
 
 setkey(pixels, id)
 setkey(pixelsbysite, pixel_id)
@@ -57,7 +81,7 @@ saveRDS(pixels, 'tables/pixels_with_sites.rds')
 #distinct(id, .keep_all=TRUE) %>%
 
 setwd('/home/rstudio/data/impacts_data')
-pixels <- readRDS('tables/pixels_with_sites.rds')
+pixels <- readRDS(tables_folder, 'pixels_with_sites.rds')
 pixels <- tbl_df(pixels)
 
 # cluster <- new_cluster(14)
@@ -107,16 +131,16 @@ pixels %>%
     write_csv('stats_by_site.csv')
 
 
-sites_sp_save <- readRDS('tables/sites_sp.rds')
-sls <- readRDS('tables/sls.rds')
-slsbysite <- readRDS('tables/slsbysite.rds')
-countries <- readRDS('tables/countries.rds')
-interventions <- readRDS('tables/interventions.rds')
-interventionbysite <- readRDS('tables/interventionbysite.rds')
-startags <- readRDS('tables/startags.rds')
-startagbysite <- readRDS('tables/startagbysite.rds')
-divisions <- readRDS('tables/divisions.rds')
+sites_sp_save <- readRDS(tables_folder, 'sites_sp.rds')
+sls <- readRDS(file.path(tables_folder, 'sls.rds'))
+slsbysite <- readRDS(file.path(tables_folder, 'slsbysite.rds'))
+countries <- readRDS(file.path(tables_folder, 'countries.rds'))
+interventions <- readRDS(file.path(tables_folder, 'interventions.rds'))
+interventionbysite <- readRDS(file.path(tables_folder, 'interventionbysite.rds'))
+startags <- readRDS(file.path(tables_folder, 'startags.rds'))
+startagbysite <- readRDS(file.path(tables_folder, 'startagbysite.rds'))
+divisions <- readRDS(file.path(tables_folder, 'divisions.rds'))
 
-species <- readRDS('tables/species.rds')
-speciesbysite <- readRDS('tables/speciesbysite.rds')
+species <- readRDS(file.path(tables_folder, 'species.rds'))
+speciesbysite <- readRDS(file.path(tables_folder, 'speciesbysite.rds'))
 sequestration_potential <- readRDS(file.path(data_folder_local, 'tables/c_potl_seq.rds'))
