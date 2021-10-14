@@ -3,8 +3,8 @@ library(multidplyr)
 library(data.table)
 library(dtplyr)
 
-#tables_folder <- 'D:/Data/Impacts_Data/tables'
-tables_folder <- '/home/rstudio/data/impacts_data/tables'
+tables_folder <- 'D:/Data/Impacts_Data/tables'
+#tables_folder <- '/home/rstudio/data/impacts_data/tables'
 
 
 ###############################################################################
@@ -48,11 +48,6 @@ sites <- sites[sls, nomatch=0]
 sites <- sites[countries, nomatch=0]
 sites <- sites[divisions, nomatch=0]
 
-# Filter out blue nature alliance
-bna_name <- 'C4O - Blue Nature Alliance'
-table(sites$division_name == bna_name)
-sites <- sites[sites$division_name != bna_name, ]
-
 pixels <- data.table(readRDS(file.path(tables_folder, 'pixels_with_seq.rds')))
 pixelsbysite <- data.table(readRDS(file.path(tables_folder, 'pixelsbysite.rds')))
 
@@ -74,8 +69,52 @@ cluster  <- new_cluster(12)
 # Partition by site
 pixels %>%
   as_tibble() %>%
-  group_by(id, site_id, biome, new_or_continued_1) %>%
+  group_by(id, site_id) %>%
   partition(cluster) -> partied_data
+
+
+###############################################################################
+###  Pre-aggregate pixels that aren't shared across sites
+
+nrow(pixels)
+partied_data %>%
+    group_by(id) %>%
+    mutate(in_multiple_sites=n() > 1) -> pixels_with_n_sites_indicator
+
+pixels_with_n_sites_indicator %>%
+    filter(!in_multiple_sites)
+    group_by(site_id) %>%
+    summarise(
+        id=id[1],
+        c_tstor_woody=sum(c_tstor_woody * area_ha * coverage_fraction, na.rm=TRUE)
+        c_tstor_soil=sum(c_tstor_soil / 100 * area_ha * coverage_fraction, na.rm=TRUE)
+        c_tstor_ic=sum(c_tstor_ic * area_ha * coverage_fraction, na.rm=TRUE)
+        carbon_seq=sum(area_ha * c_potl_seq, na.rm=TRUE)
+        population=sum(population * coverage_fraction, na.rm=TRUE),
+        area_ha=sum(area_ha * coverage_fraction, na.rm=TRUE)
+    ) %>%
+    mutate(
+        id=id[1],
+        coverage_fraction = 1,
+        c_tstor_woody=c_tstor_woody / area_ha,
+        c_tstor_soil=c_tstor_soil / area_ha,
+        c_tstor_ic=c_tstor_ic / area_ha,
+        carbon_seq=area_ha  / area_ha,
+        population=population / area_ha
+    ) -> pixels_in_one_site_agg
+
+
+pixels_with_n_sites_indicator %>%
+    filter(in_multiple_sites) %>%
+    bind_rows(pixels_in_one_site_agg) -> pixels_after_agg
+
+
+
+
+    group_by(id, in_multiple_sites) %>%
+    slice(which.max(coverage_fraction)) %>%
+    group_by(biome, new_or_continued_1) %>%
+    mutate(high_irr_c = c_tstor_ic > 25,
 
 
 ###############################################################################
