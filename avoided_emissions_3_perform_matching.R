@@ -8,10 +8,10 @@ library(biglm)
 library(tictoc)
 library(doParallel)
 
-data_folder_impacts <- '/home/rstudio/data/impacts_data'
-data_folder_avoided_emissions <- '/home/rstudio/data/impacts_data/avoided_emissions_data'
-#data_folder_avoided_emissions <- 
-#'D:/Code/LandDegradation/impact_indicators/extract-indicators/avoided_emissions_data'
+#data_folder_impacts <- '/home/rstudio/data/impacts_data'
+#data_folder_avoided_emissions <- '/home/rstudio/data/impacts_data/avoided_emissions_data'
+data_folder_impacts <- 'D:/Data/Impacts_Data/'
+data_folder_avoided_emissions <- 'D:/Data/Impacts_Data/avoided_emissions_data'
 
 MAX_TREATMENT <- 1000
 CONTROL_MULTIPLIER <- 50
@@ -312,7 +312,7 @@ m_processed <- foreach (i=1:n_chunks, .combine=bind_rows) %do% {
             filter(between(year, ci_start_year[1] - 1, ci_end_year[1])) %>%
             mutate(forest_at_year_end=forest_at_year_end/100 * area_ha) %>% # include one year prior to project start to get initial forest cover
             arrange(cell, year) %>%
-            mutate(forest_loss_during_year=c(NA, diff(forest_at_year_end)),
+            mutate(forest_change_during_year=c(NA, diff(forest_at_year_end)), # So positive is loss
                    forest_frac_remaining = forest_at_year_end / forest_at_year_end[1],
                    biomass_at_year_end = total_biomass * forest_frac_remaining,
                    #  to convert biomass to carbon * .5
@@ -330,14 +330,17 @@ m_processed %>%
     summarise(
         ci_start_year=ci_start_year[1],
         ci_end_year=ci_end_year[1],
+        # correct totals for areas where only a partial sample was used by 
+        # taking into account the fraction sampled later on, just save the
+        # fraction for now
         sampled_fraction=sampled_fraction[1],
         match_group=match_group[1],
-        # correct totals for areas where only a partial sample was used by 
-        # taking into account the fraction sampled
-        forest_loss_ha=sum(abs(forest_loss_during_year), na.rm=TRUE) * (1 / sampled_fraction[1]),
-        Emissions_MgCO2e=sum(abs(Emissions_MgCO2e), na.rm=TRUE) * (1 / sampled_fraction[1]),
+        forest_loss_ha=sum(abs(forest_change_during_year), na.rm=TRUE),
+        Emissions_MgCO2e=sum(abs(Emissions_MgCO2e), na.rm=TRUE),
         n_pixels=n()
-    ) %>%
+    ) -> pixels_ae_intermediate
+
+pixels_ae_intermediate %>%
     group_by(match_group, cell, treatment) %>%
     summarise(
         forest_loss_ha=sum(forest_loss_ha, na.rm=TRUE),
@@ -351,8 +354,25 @@ m_processed %>%
     ) %>%
     rename(id=cell)  %>%
     ungroup() %>%
-    select(-match_group) -> pixels_ae
-saveRDS(pixels_ae, file.path(data_folder_impacts, 'tables', 'pixels_ae.rds'))
+    select(-match_group) -> pixels_ae_full_investment_period
+saveRDS(pixels_ae_full_investment_period, file.path(data_folder_impacts, 'tables', 'pixels_ae_full_investment_period.rds'))
+
+pixels_ae_intermediate %>%
+    group_by(match_group, cell, treatment, year) %>%
+    summarise(
+        forest_loss_ha=sum(forest_loss_ha, na.rm=TRUE),
+        Emissions_MgCO2e=sum(Emissions_MgCO2e, na.rm=TRUE)
+    ) %>%
+    group_by(match_group, year) %>%
+    summarise(
+        cell=cell[treatment],
+        forest_loss_avoided_ha=forest_loss_ha[!treatment] - forest_loss_ha[treatment],
+        emissions_avoided_mgco2e=Emissions_MgCO2e[!treatment] - Emissions_MgCO2e[treatment]
+    ) %>%
+    rename(id=cell)  %>%
+    ungroup() %>%
+    select(-match_group) -> pixels_ae_by_year
+saveRDS(pixels_ae_by_year, file.path(data_folder_impacts, 'tables', 'pixels_ae_by_year.rds'))
 
 m_processed %>%
     distinct(cell, id) %>%
@@ -362,3 +382,61 @@ m_processed %>%
     ) %>%
     relocate(cell_id) -> pixels_ae_bysite
 saveRDS(pixels_ae_bysite, file.path(data_folder_impacts, 'tables', 'pixels_ae_bysite.rds'))
+# Make a table of sample fractions by site so they can be applied in database
+m_processed %>%
+    distinct(id, sampled_fraction) %>%
+    rename(
+        site_id=id
+    ) -> pixels_ae_sampledfraction
+saveRDS(pixels_ae_sampledfraction, file.path(data_folder_impacts, 'tables', 'pixels_ae_sampledfraction.rds'))
+
+
+
+
+
+
+readRDS(
+    file.path(
+        data_folder_impacts,
+        'tables',
+        'divisionbysite.rds'
+    )
+) %>%
+    full_join(
+        readRDS(
+            file.path(
+                data_folder_impacts,
+                'tables',
+                'divisions.rds'
+            )
+        ),
+        by=c('division_id'='id')
+    ) %>%
+    select(-division_id) %>%
+    rename(division=name) -> division_key
+
+filter(pixels_ae_by_year, year == 2020) %>%
+    full_join(pixels_ae_bysite, by=c('id'='cell_id')) %>%
+    distinct(id, .keep_all=TRUE) %>%
+    filter(!grepl('BNA', site_id)) %>%
+    left_join(pixels_ae_sampledfraction) %>%
+    left_join(
+        sites %>%
+        select(site_id=id, iso) %>%
+        distinct(site_id, .keep_all=TRUE)
+    )  %>%
+    left_join(division_key) %>%
+    group_by(division) %>%
+    summarise(
+        forest_loss_avoided_ha = sum(forest_loss_avoided_ha * (1 / sampled_fraction), na.rm=TRUE),
+        emissions_avoided_mgco2e = sum(emissions_avoided_mgco2e * (1 / sampled_fraction), na.rm=TRUE)
+    ) %>% write_csv('avoided_missions_2020CY_bydivision.csv')
+
+# Total global avoided emissions
+
+pixels_ae_by_year %>%
+    full_join(pixels_ae_bysite, by=c('id'='cell_id')) %>%
+    group_by(site_id) %>%
+    summarise(forest_loss_avoided_ha=sum(forest_loss_avoided_ha, na.rm=TRUE),
+              emissions_avoided_mgco2e=sum(emissions_avoided_mgco2e, na.rm=TRUE))
+              
