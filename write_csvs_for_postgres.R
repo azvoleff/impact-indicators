@@ -49,6 +49,7 @@ countries <- countries[, .(site_id, country_id)]
 sites <- data.table(readRDS(file.path(tables_folder, 'sites.rds')))
 # Remove shape column since it is large and not needed
 sites[, shape:=NULL]
+sites[, reporting_year:=NULL]
 
 setkey(sites, id)
 setkey(sls, site_id)
@@ -58,34 +59,37 @@ setkey(countries, site_id)
 sites <- sites[sls, nomatch=0]
 sites <- sites[countries, nomatch=0]
 sites <- sites[divisions, nomatch=0]
+setkey(sites, id)
 
 pixels <- data.table(readRDS(file.path(tables_folder, 'pixels_with_seq.rds')))
-setkey(pixels, id)
 pixelsbysite <- data.table(readRDS(file.path(tables_folder, 'pixelsbysite.rds')))
+
+setkey(pixels, id)
 setkey(pixelsbysite, pixel_id)
-
-# Merge pixels and pixelsbysite
-
 pixels <- pixels[pixelsbysite, nomatch=0]
 
 # Add site columns
 setkey(pixels, site_id)
 setkey(sites, id)
-pixels <- pixels[sites, nomatch=0, allow.cartesian=TRUE]
-setnames(pixels, "i.reporting_year", "reporting_year")
+pixels_join <- pixels[sites, nomatch=0, allow.cartesian=TRUE]
+
+saveRDS(pixels_join, 'pixels_join.rds')
+
 
 ###############################################################################
 ###  Partition across CPUs
 
-cluster  <- new_cluster(12)
+cluster  <- new_cluster(24)
 # Partition by site
-pixels %>%
+pixels_join %>%
   as_tibble() %>%
-  group_by(id, country_id, site_id, sls_id, division_id, reporting_year, new_or_continued_1) %>%
+  group_by(id, site_id) %>%
   partition(cluster) -> partied_data
+  
 
 ###############################################################################
 ### Country summaries
+
 partied_data %>%
     group_by(id, country_id, reporting_year, new_or_continued_1) %>%
     slice(which.max(coverage_fraction)) %>%
@@ -100,7 +104,6 @@ partied_data %>%
         restoration_area=sum(area_ha[under_restoration] * coverage_fraction[under_restoration], na.rm=TRUE),
         calc_tstor_woody=sum(c_tstor_woody / 100 * area_ha * coverage_fraction, na.rm=TRUE),
         calc_tstor_soil=sum(c_tstor_soil / 100 * area_ha * coverage_fraction, na.rm=TRUE),
-		calc_tstor=sum(sum(c_tstor_woody / 100 * area_ha * coverage_fraction, na.rm=TRUE), sum(c_tstor_soil / 100 * area_ha * coverage_fraction, na.rm=TRUE), na.rm=TRUE),
         calc_tstor_ic=sum(c_tstor_ic * area_ha * coverage_fraction, na.rm=TRUE),
         calc_ha_ic=sum(area_ha[any_irr_c] * coverage_fraction[any_irr_c], na.rm=TRUE),
         calc_ha_high_ic=sum(area_ha[high_irr_c] * coverage_fraction[high_irr_c], na.rm=TRUE),
@@ -108,6 +111,9 @@ partied_data %>%
         carbon_sequestered=sum(area_ha * c_potl_seq, na.rm=TRUE),
 		calc_carbon_sequestered=sum(area_ha * c_potl_seq * coverage_fraction, na.rm=TRUE),
         calc_population=sum(population * coverage_fraction, na.rm=TRUE)
+    ) %>%
+    mutate(
+		calc_tstor=calc_tstor_woody + calc_tstor_soil
     ) %>%
     collect() -> country_data
 country_data %>%
@@ -259,6 +265,53 @@ site_data %>%
         ttl_population=sum(calc_population)
     ) %>% write_csv('site_data.csv')
 put_object('site_data.csv', object='impacts_data/csv_out/site_data.csv', bucket='landdegradation')
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+pixels_sliced <- pixels_join[
+  pixels_join[,
+              .I[pt == max(coverage_fraction)],
+              by=list(id, country_id, reporting_year, new_or_continued_1)
+  ]$V1
+]
+
+pixels_sliced <- pixels_join[, .SD[which.max(coverage_fraction)], by=list(id, country_id, reporting_year, new_or_continued_1)]
+
+pixels_sliced[, high_irr_c := c_tstor_ic > 25]
+pixels_sliced[, any_irr_c := c_tstor_ic > .01]
+pixels_sliced[, under_restoration := (restoration_type != ' ' & restoration_type != 'Not Applicable' & !is.na(restoration_type)]
+
+
+
+
+group_by(country_id, reporting_year, new_or_continued_1) %>%
+  mutate(
+    high_irr_c = c_tstor_ic > 25,
+    any_irr_c = c_tstor_ic > .01,
+    under_restoration = (restoration_type != ' ' & restoration_type != 'Not Applicable' & !is.na(restoration_type))
+  ) %>%
+  
+  
+  group_slice_max = group[group[, .I[which.max(pt)], by=Subject]$V1]
+
 
 
 
