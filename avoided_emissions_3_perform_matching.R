@@ -415,28 +415,34 @@ readRDS(
     select(-division_id) %>%
     rename(division=name) -> division_key
 
+
+
+# Total global avoided emissions
 filter(pixels_ae_by_year, year == 2020) %>%
     full_join(pixels_ae_bysite, by=c('id'='cell_id')) %>%
+    filter(!grepl('BNA', site_id)) %>%
+    left_join(pixels_ae_sampledfraction) %>%
     distinct(id, .keep_all=TRUE) %>%
+    summarise(
+        forest_loss_avoided_ha = sum(forest_loss_avoided_ha * (1 / sampled_fraction), na.rm=TRUE),
+        emissions_avoided_mgco2e = sum(emissions_avoided_mgco2e * (1 / sampled_fraction), na.rm=TRUE)
+    ) %>% write_csv('avoided_missions_2020CY_global.csv')
+
+# Divisional avoided emissions
+filter(pixels_ae_by_year, year == 2020) %>%
+    full_join(pixels_ae_bysite, by=c('id'='cell_id')) %>%
     filter(!grepl('BNA', site_id)) %>%
     left_join(pixels_ae_sampledfraction) %>%
     left_join(
         sites %>%
-        select(site_id=id, iso) %>%
-        distinct(site_id, .keep_all=TRUE)
+            select(site_id=id, iso) %>%
+            distinct(site_id, .keep_all=TRUE)
     )  %>%
     left_join(division_key) %>%
-    group_by(division) %>%
+    distinct(id, .keep_all=TRUE) %>%
+    group_by(division, iso) %>%
     summarise(
         forest_loss_avoided_ha = sum(forest_loss_avoided_ha * (1 / sampled_fraction), na.rm=TRUE),
         emissions_avoided_mgco2e = sum(emissions_avoided_mgco2e * (1 / sampled_fraction), na.rm=TRUE)
-    ) %>% write_csv('avoided_missions_2020CY_bydivision.csv')
-
-# Total global avoided emissions
-
-pixels_ae_by_year %>%
-    full_join(pixels_ae_bysite, by=c('id'='cell_id')) %>%
-    group_by(site_id) %>%
-    summarise(forest_loss_avoided_ha=sum(forest_loss_avoided_ha, na.rm=TRUE),
-              emissions_avoided_mgco2e=sum(emissions_avoided_mgco2e, na.rm=TRUE))
+    ) %>% write_csv('avoided_missions_2020CY_division_iso.csv')
               
