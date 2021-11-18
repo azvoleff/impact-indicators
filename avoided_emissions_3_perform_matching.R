@@ -8,10 +8,10 @@ library(biglm)
 library(tictoc)
 library(doParallel)
 
-#data_folder_impacts <- '/home/rstudio/data/impacts_data'
-#data_folder_avoided_emissions <- '/home/rstudio/data/impacts_data/avoided_emissions_data'
-data_folder_impacts <- 'D:/Data/Impacts_Data/'
-data_folder_avoided_emissions <- 'D:/Data/Impacts_Data/avoided_emissions_data'
+data_folder_impacts <- '/home/rstudio/data/impacts_data'
+data_folder_avoided_emissions <- '/home/rstudio/data/impacts_data/avoided_emissions_data'
+#data_folder_impacts <- 'D:/Data/Impacts_Data/'
+#data_folder_avoided_emissions <- 'D:/Data/Impacts_Data/avoided_emissions_data'
 
 MAX_TREATMENT <- 1000
 CONTROL_MULTIPLIER <- 50
@@ -323,6 +323,12 @@ m_processed <- foreach (i=1:n_chunks, .combine=bind_rows) %do% {
             as_tibble()
     }
 }
+
+m_processed %>%
+    filter((year >= ci_start_year) & (year <= ci_end_year)) %>%
+    distinct(cell, year, .keep_all=TRUE) %>%
+    saveRDS(file.path(data_folder_impacts, 'tables', 'pixels_ae_raw.rds'))
+
 
 m_processed %>%
     distinct(cell, year, .keep_all=TRUE) %>%
