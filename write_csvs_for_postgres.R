@@ -354,6 +354,22 @@ put_object(
 ###############################################################################
 ### Avoided emissions summaries
 
+pixels_ae_raw <- readRDS(file.path(tables_folder, 'pixels_ae_raw.rds'))
+
+pixels_ae_raw %>%
+  filter(treatment) %>%
+  
+
+<- readRDS(file.path(tables_folder, 'pixels_ae_raw.rds'))
+
+
+pixels_ae_bysite <- readRDS(file.path(tables_folder, 'pixels_ae_bysite.rds'))
+pixels_ae_sampledfraction <- readRDS(file.path(tables_folder, 'pixels_ae_sampledfraction.rds'))
+
+pixels_ae <- readRDS(file.path(tables_folder, 'pixels_ae.rds'))
+
+
+
 
 #pixels_sliced <- pixels_join[
 #  pixels_join[,
