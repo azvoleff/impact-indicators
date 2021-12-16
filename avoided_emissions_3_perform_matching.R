@@ -8,10 +8,10 @@ library(biglm)
 library(tictoc)
 library(doParallel)
 
-data_folder_impacts <- '/home/rstudio/data/impacts_data'
-data_folder_avoided_emissions <- '/home/rstudio/data/impacts_data/avoided_emissions_data'
-#data_folder_impacts <- 'D:/Data/Impacts_Data/'
-#data_folder_avoided_emissions <- 'D:/Data/Impacts_Data/avoided_emissions_data'
+#data_folder_impacts <- '/home/rstudio/data/impacts_data'
+#data_folder_avoided_emissions <- '/home/rstudio/data/impacts_data/avoided_emissions_data'
+data_folder_impacts <- 'D:/Data/Impacts_Data/'
+data_folder_avoided_emissions <- 'D:/Data/Impacts_Data/avoided_emissions_data'
 
 MAX_TREATMENT <- 1000
 CONTROL_MULTIPLIER <- 50
@@ -343,20 +343,23 @@ m_processed %>%
         match_group=match_group[1],
         forest_loss_ha=sum(abs(forest_change_during_year), na.rm=TRUE),
         Emissions_MgCO2e=sum(abs(Emissions_MgCO2e), na.rm=TRUE),
-        n_pixels=n()
+        n_pixels=n(),
+        area_sampled_ha=sum(area_ha),
     ) -> pixels_ae_intermediate
 
 pixels_ae_intermediate %>%
     group_by(match_group, cell, treatment) %>%
     summarise(
         forest_loss_ha=sum(forest_loss_ha, na.rm=TRUE),
-        Emissions_MgCO2e=sum(Emissions_MgCO2e, na.rm=TRUE)
+        Emissions_MgCO2e=sum(Emissions_MgCO2e, na.rm=TRUE),
+        area_sampled_ha=sum(area_sampled_ha)
     ) %>%
     group_by(match_group) %>%
     summarise(
         cell=cell[treatment],
         forest_loss_avoided_ha=forest_loss_ha[!treatment] - forest_loss_ha[treatment],
-        emissions_avoided_mgco2e=Emissions_MgCO2e[!treatment] - Emissions_MgCO2e[treatment]
+        emissions_avoided_mgco2e=Emissions_MgCO2e[!treatment] - Emissions_MgCO2e[treatment],
+        area_sampled_ha=sum(area_sampled_ha)
     ) %>%
     rename(id=cell)  %>%
     ungroup() %>%
@@ -367,13 +370,15 @@ pixels_ae_intermediate %>%
     group_by(match_group, cell, treatment, year) %>%
     summarise(
         forest_loss_ha=sum(forest_loss_ha, na.rm=TRUE),
-        Emissions_MgCO2e=sum(Emissions_MgCO2e, na.rm=TRUE)
+        Emissions_MgCO2e=sum(Emissions_MgCO2e, na.rm=TRUE),
+        area_sampled_ha=sum(area_sampled_ha)
     ) %>%
     group_by(match_group, year) %>%
     summarise(
         cell=cell[treatment],
         forest_loss_avoided_ha=forest_loss_ha[!treatment] - forest_loss_ha[treatment],
-        emissions_avoided_mgco2e=Emissions_MgCO2e[!treatment] - Emissions_MgCO2e[treatment]
+        emissions_avoided_mgco2e=Emissions_MgCO2e[!treatment] - Emissions_MgCO2e[treatment],
+        area_sampled_ha=sum(area_sampled_ha)
     ) %>%
     rename(id=cell)  %>%
     ungroup() %>%

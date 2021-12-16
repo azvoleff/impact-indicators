@@ -5,9 +5,11 @@ library(dtplyr)
 library(aws.s3)
 library(aws.ec2metadata) # Needed to use IAM roles on EC2
 
-#tables_folder <- 'D:/Data/Impacts_Data/tables'
-tables_folder <- '/home/rstudio/data/impacts_data/tables'
-csv_folder <- '/home/rstudio/data/impacts_data/csv_out'
+tables_folder <- 'D:/Data/Impacts_Data/tables'
+csv_folder <- 'D:/Data/Impacts_Data/csv_out'
+data_folder_avoided_emissions <- 'D:/Data/Impacts_Data/avoided_emissions_data'
+#tables_folder <- '/home/rstudio/data/impacts_data/tables'
+#csv_folder <- '/home/rstudio/data/impacts_data/csv_out'
 
 ###############################################################################
 # Join various tables together
@@ -64,6 +66,114 @@ sites <- sites[countries, nomatch=0]
 sites <- sites[divisions, nomatch=0]
 setkey(sites, id)
 
+###############################################################################
+###  Avoided emissions and forest change trends
+
+pixels_ae_full_investment_period <- data.table(readRDS(file.path(tables_folder, 'pixels_ae_full_investment_period.rds')))
+pixels_ae_by_year <- data.table(readRDS(file.path(tables_folder, 'pixels_ae_by_year.rds')))
+pixels_ae_bysite <- data.table(readRDS(file.path(tables_folder, 'pixels_ae_bysite.rds')))
+pixels_ae_sampledfraction <- data.table(readRDS(file.path(tables_folder, 'pixels_ae_sampledfraction.rds')))
+
+pixels_ae_sampledfraction %>%
+    distinct(site_id, sampled_fraction) %>%
+    filter(!(grepl('BNA', site_id))) %>%
+    as_tibble() -> pixels_ae_sampledfraction_filtered
+
+inner_join(
+    pixels_ae_full_investment_period, pixels_ae_bysite, by=c('id'='cell_id')
+) %>%
+    inner_join(pixels_ae_sampledfraction_filtered) %>%
+    group_by(site_id) %>%
+    summarise(
+        forest_loss_avoided_ha=sum(forest_loss_avoided_ha),
+        emissions_avoided_mgco2e = sum(emissions_avoided_mgco2e),
+        area_sampled_ha = sum(area_sampled_ha)
+    ) %>%
+    mutate(reporting_year = 'FY2022') %>%
+    inner_join(pixels_ae_sampledfraction) %>%
+    mutate(
+        forest_loss_avoided_ha = forest_loss_avoided_ha * 1 / sampled_fraction[1],
+        emissions_avoided_mgco2e = emissions_avoided_mgco2e * 1 / sampled_fraction,
+        area_ha = area_sampled_ha * 1 / sampled_fraction
+    ) %>%
+    select(-sampled_fraction) %>%
+    as_tibble() -> avoided_emissions_full_period
+avoided_emissions_full_period %>%
+    select(-area_ha) %>%
+    write_csv(file.path(csv_folder, 'avoided_emissions_full_period.csv'))
+
+inner_join(
+    pixels_ae_by_year, pixels_ae_bysite, by=c('id'='cell_id')
+) %>%
+    inner_join(pixels_ae_sampledfraction_filtered) %>%
+    group_by(site_id, year) %>%
+    summarise(
+        forest_loss_avoided_ha=sum(forest_loss_avoided_ha) * 1 / sampled_fraction[1],
+        emissions_avoided_mgco2e = sum(emissions_avoided_mgco2e) * 1 / sampled_fraction[1],
+        area_ha = sum(area_sampled_ha) * 1 / sampled_fraction[1]
+    ) %>%
+    mutate(reporting_year = 'FY2022') %>%
+    as_tibble() -> avoided_emissions_by_year
+avoided_emissions_by_year %>%
+    select(-area_ha) %>%
+    write_csv(file.path(csv_folder, 'avoided_emissions_by_year.csv'))
+
+avoided_emissions_by_year %>%
+    group_by(year) %>%
+    summarise(forest_loss_avoided_ha = sum(forest_loss_avoided_ha),
+              emissions_avoided_mgco2e = sum(emissions_avoided_mgco2e),
+              area_ha = sum(area_ha)) %>%
+    pivot_longer(forest_loss_avoided_ha:area_ha) %>%
+    ggplot() +
+    geom_line(aes(year, value)) +
+    facet_wrap(name~., scales='free_y')
+
+
+# Forest change data (annual change in forest cover)
+treatments_and_controls <- data.table(readRDS(file.path(data_folder_avoided_emissions, 'treatments_and_controls.RDS')))
+treatment_key <- data.table(readRDS(file.path(data_folder_avoided_emissions, 'treatment_cell_key.RDS')))
+
+treatment_key[, c("reporting_year", "region"):=NULL]
+treatments_and_controls <- treatments_and_controls[, .SD, .SDcols = patterns("(cell)|(fc_[0-9]{2})")]
+
+setkey(treatment_key, cell)
+setkey(treatments_and_controls, cell)
+
+fc <- treatment_key[treatments_and_controls, nomatch=0]
+
+fc# Convert pixel areas into pixels areas that are actually within site, using
+# coverage_fraction. Then drop that col as no longer needed
+fc[, area_ha:=area_ha*coverage_fraction]
+fc[, coverage_fraction:=NULL]
+
+# Multiply each fc col by the area in hectares and coverage fraction, to
+# convert the fc cols from fractions to forest areas. Neex to convert fc cols
+# from percentages (/ 100)
+indx <- grep('fc_', colnames(fc))
+for(j in indx){
+    set(fc, i=NULL, j=j, value=(fc[[j]]/ 100 ) * fc[['area_ha']])
+}
+
+# Sum across all rows to get forest cover in hectares for each year
+fc[, cell:=NULL]
+fc <- fc[, lapply(.SD, sum, na.rm=TRUE), by=id_numeric]
+
+site_id_numeric_key <- data.table(read_csv(file.path(data_folder_avoided_emissions, 'site_id_key.csv')))
+setkey(fc, id_numeric)
+setkey(site_id_numeric_key, id_numeric)
+fc <- site_id_numeric_key[fc, nomatch=0]
+fc[, id_numeric:=NULL]
+
+write_csv(fc, file.path(csv_folder, 'forest_change.csv'))
+put_object(
+  file.path(csv_folder, 'forest_change.csv'),
+  object='impacts_data/csv_out/forest_change.csv',
+  bucket='landdegradation'
+)
+
+###############################################################################
+###  Main pixels data
+
 pixels <- data.table(readRDS(file.path(tables_folder, 'pixels_with_seq.rds')))
 pixelsbysite <- data.table(readRDS(file.path(tables_folder, 'pixelsbysite.rds')))
 
@@ -78,10 +188,6 @@ pixels_join <- pixels[sites, nomatch=0, allow.cartesian=TRUE]
 
 saveRDS(pixels_join, file.path(tables_folder, 'pixels_joined.rds'))
 
-
-
-###############################################################################
-###  Partition across CPUs
 
 pixels_join <- readRDS(file.path(tables_folder, 'pixels_joined.rds'))
 
@@ -349,26 +455,6 @@ put_object(
 		   object='impacts_data/csv_out/ecosystem_data.csv',
 		   bucket='landdegradation'
 )
-
-
-###############################################################################
-### Avoided emissions summaries
-
-pixels_ae_raw <- readRDS(file.path(tables_folder, 'pixels_ae_raw.rds'))
-
-pixels_ae_raw %>%
-  filter(treatment) %>%
-  
-
-<- readRDS(file.path(tables_folder, 'pixels_ae_raw.rds'))
-
-
-pixels_ae_bysite <- readRDS(file.path(tables_folder, 'pixels_ae_bysite.rds'))
-pixels_ae_sampledfraction <- readRDS(file.path(tables_folder, 'pixels_ae_sampledfraction.rds'))
-
-pixels_ae <- readRDS(file.path(tables_folder, 'pixels_ae.rds'))
-
-
 
 
 #pixels_sliced <- pixels_join[
